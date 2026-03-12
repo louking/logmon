@@ -144,6 +144,19 @@ ENV/
 env.bak/
 venv.bak/
 
+# configuration
+*.json
+*.cfg
+*-config.js
+*_config.py
+config/
+
+# external javascript
+js/
+
+# gunicorn
+gunicorn.ctl
+
 # Spyder project settings
 .spyderproject
 .spyproject
