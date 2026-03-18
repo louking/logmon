@@ -1,0 +1,91 @@
+{% extends "base.jinja2" %}
+{% block title %}Live Tail – LogMonitor{% endblock %}
+{% block page_title %}<span class="live-dot"></span>Live Tail{% endblock %}
+
+{% block content %}
+<div class="toolbar">
+  <form method="get" style="display:flex;gap:10px;align-items:center;">
+    <label style="font-size:11px;color:var(--text-muted);">App:</label>
+    <select name="app" class="select" onchange="this.form.submit()">
+      {% for a in app_names %}
+      <option value="{{ a }}" {% if a == selected %}selected{% endif %}>{{ a }}</option>
+      {% endfor %}
+    </select>
+  </form>
+
+  <label style="font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:6px;">
+    <input type="checkbox" id="chk-errors-only" style="accent-color:var(--red);">
+    Errors only
+  </label>
+
+  <label style="font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:6px;">
+    <input type="checkbox" id="chk-autoscroll" checked style="accent-color:var(--accent);">
+    Auto-scroll
+  </label>
+
+  <button class="btn btn-ghost" id="btn-clear">Clear</button>
+
+  <div style="margin-left:auto;font-size:11px;color:var(--text-muted);" id="tail-status">connecting…</div>
+</div>
+
+<div class="terminal" id="terminal"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const SELECTED = {{ selected | tojson }};
+  const terminal = document.getElementById('terminal');
+  const statusEl = document.getElementById('tail-status');
+  let lastTs = null;
+  let errorsOnly = false;
+
+  document.getElementById('chk-errors-only').addEventListener('change', e => {
+    errorsOnly = e.target.checked;
+  });
+
+  document.getElementById('btn-clear').addEventListener('click', () => {
+    terminal.innerHTML = '';
+  });
+
+  function autoScroll() {
+    if (document.getElementById('chk-autoscroll').checked) {
+      terminal.scrollTop = terminal.scrollHeight;
+    }
+  }
+
+  function addLine(item) {
+    if (errorsOnly && item.level !== 'ERROR') return;
+    const div = document.createElement('div');
+    div.className = 'terminal-line level-' + (item.level || 'INFO');
+    const ts = item.occurred_at ? item.occurred_at.replace('T',' ').slice(0,19) : '';
+    div.textContent = `${ts}  ${item.level || ''}  ${item.message || item.raw || ''}`;
+    terminal.appendChild(div);
+    // Keep DOM lean
+    while (terminal.children.length > 1000) terminal.removeChild(terminal.firstChild);
+  }
+
+  function poll() {
+    const url = `/api/tail/${SELECTED}?n=100`;
+    fetch(url)
+      .then(r => r.json())
+      .then(lines => {
+        if (!lastTs) {
+          // Initial load – show last 30 lines
+          lines.slice(-30).forEach(addLine);
+          if (lines.length) lastTs = lines[lines.length-1].occurred_at;
+          statusEl.textContent = `${lines.length} buffered lines`;
+        } else {
+          const newLines = lines.filter(l => l.occurred_at > lastTs);
+          newLines.forEach(addLine);
+          if (newLines.length) lastTs = newLines[newLines.length-1].occurred_at;
+          statusEl.textContent = `last update: ${new Date().toISOString().slice(11,19)}`;
+        }
+        autoScroll();
+      })
+      .catch(() => { statusEl.textContent = 'poll error – retrying…'; });
+  }
+
+  poll();
+  setInterval(poll, 2000);
+</script>
+{% endblock %}

@@ -37,13 +37,15 @@ def create_app(config_obj, configfiles=None, init_for_operation=True):
     global app
     # can't have hyphen in package name, so need to specify with underscore
     app = Flask(appname.replace('-', '_'))
-    app.config.from_object(config_obj)
+    cfg = config_obj.load(configfiles)
+    app.config.from_object(cfg)
     if configfiles:
         for configfile in configfiles:
             appconfig = getitems(configfile, 'app')
             app.config.update(appconfig)
 
     # load any environment variables which start with FLASK_
+    # note these override those previously set, which allows env vars to override config files
     app.config.from_prefixed_env(prefix='FLASK')
 
     with app.app_context():
@@ -120,11 +122,20 @@ def create_app(config_obj, configfiles=None, init_for_operation=True):
     # activate views
     from .views import userrole as userroleviews
     from loutilities.user.views import bp as userrole
-    app.register_blueprint(userrole)
     from .views.frontend import bp as frontend
-    app.register_blueprint(frontend)
     from .views.admin import bp as admin
+    from .views.dashboard import bp as dashboard_bp
+    from .views.logs import bp as logs_bp
+    from .views.sns import bp as sns_bp
+    from .views.api import bp as api_bp
+
+    app.register_blueprint(userrole)
+    app.register_blueprint(frontend)
     app.register_blueprint(admin)
+    app.register_blueprint(dashboard_bp)
+    app.register_blueprint(logs_bp)
+    app.register_blueprint(sns_bp)
+    app.register_blueprint(api_bp)
 
     # need to force app context else get
     #    RuntimeError: Working outside of application context.

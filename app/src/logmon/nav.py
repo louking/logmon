@@ -70,10 +70,12 @@ def nav_menu():
     leadership_superadmin_view = add_view('https://logmon.readthedocs.io/en/{docversion}/super-admin-reference.html#')
 
     if current_user.is_authenticated:
-        navbar.items.append(View('Home', 'admin.home'))
+        if current_user.has_role(ROLE_SUPER_ADMIN):
+            navbar.items.append(View('Dashboard', 'dashboard.index'))
 
         # superadmin stuff
-        if current_user.has_role(ROLE_SUPER_ADMIN):
+            leadership_superadmin_view(navbar, 'Users', 'userrole.users')
+            
             userroles = Subgroup('Super')
             navbar.items.append(userroles)
 

@@ -1,0 +1,87 @@
+{% extends "base.jinja2" %}
+{% block title %}{{ app_name }} logs – LogMonitor{% endblock %}
+{% block page_title %}{{ app_name }}{% endblock %}
+
+{% block content %}
+<form method="get" class="toolbar">
+  <input type="text" name="q" value="{{ search }}" placeholder="Search message / URL / exception…" class="input">
+  <select name="level" class="select">
+    <option value="">All levels</option>
+    <option value="ERROR"   {% if level=='ERROR'   %}selected{% endif %}>ERROR</option>
+    <option value="WARNING" {% if level=='WARNING' %}selected{% endif %}>WARNING</option>
+    <option value="INFO"    {% if level=='INFO'    %}selected{% endif %}>INFO</option>
+  </select>
+  <button type="submit" class="btn btn-primary">Filter</button>
+  <a href="{{ url_for('logs.app_log', app_name=app_name) }}" class="btn btn-ghost">Reset</a>
+  <div style="margin-left:auto;">
+    <a href="{{ url_for('logs.live') }}?app={{ app_name }}" class="btn btn-ghost">
+      <span class="live-dot" style="width:5px;height:5px;"></span> Live tail
+    </a>
+  </div>
+</form>
+
+<div class="card">
+  <div class="card-header">
+    {{ pagination.total }} events
+    {% if level %} · level={{ level }}{% endif %}
+    {% if search %} · q={{ search }}{% endif %}
+  </div>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Level</th>
+        <th>User</th>
+        <th>Method</th>
+        <th>URL / Message</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for e in pagination.items %}
+      <tr>
+        <td class="text-muted" style="white-space:nowrap;font-size:11px;">{{ e.occurred_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+        <td>
+          {% if e.level == 'ERROR' %}<span class="badge badge-error">ERROR</span>
+          {% elif e.level == 'WARNING' %}<span class="badge badge-warn">WARN</span>
+          {% else %}<span class="badge badge-info">{{ e.level }}</span>{% endif %}
+        </td>
+        <td class="text-muted" style="font-size:11px;">{{ e.user or '–' }}</td>
+        <td class="text-muted" style="font-size:11px;">{{ e.method or '–' }}</td>
+        <td>
+          <a href="{{ url_for('logs.event_detail', app_name=app_name, event_id=e.id) }}" class="truncate" style="display:block;max-width:320px;">
+            {{ e.exception_type or e.url or e.message or '–' }}
+          </a>
+        </td>
+        <td>
+          {% if e.status_code %}
+            <span class="status-{{ (e.status_code // 100) }}xx">{{ e.status_code }}</span>
+          {% else %}–{% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="text-muted">No events match your filter.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if pagination.pages > 1 %}
+<div class="pagination">
+  {% if pagination.has_prev %}
+    <a href="?page={{ pagination.prev_num }}&level={{ level }}&q={{ search }}" class="page-link">‹</a>
+  {% endif %}
+  {% for p in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
+    {% if p %}
+      <a href="?page={{ p }}&level={{ level }}&q={{ search }}"
+         class="page-link {% if p == pagination.page %}current{% endif %}">{{ p }}</a>
+    {% else %}
+      <span class="page-link" style="color:var(--text-dim);">…</span>
+    {% endif %}
+  {% endfor %}
+  {% if pagination.has_next %}
+    <a href="?page={{ pagination.next_num }}&level={{ level }}&q={{ search }}" class="page-link">›</a>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

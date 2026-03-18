@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}LogMon{% endblock %}</title>
+  <!-- Apply stored theme before render to avoid flash of wrong theme -->
+  <script>
+    (function() {
+      var t = localStorage.getItem('logmon-theme');
+      if (t) document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Syne:wght@400;600;700;800&display=swap">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <div class="shell">
+
+    <nav class="sidebar">
+      <div class="sidebar-brand">
+        <span class="brand-icon">◈</span>
+        <span class="brand-text">LogMon</span>
+      </div>
+
+      <div class="nav-section">
+        <div class="nav-label">OVERVIEW</div>
+        <a href="{{ url_for('dashboard.index') }}" class="nav-link {% if request.endpoint == 'dashboard.index' %}active{% endif %}">
+          <span class="nav-icon">⬡</span> Dashboard
+        </a>
+      </div>
+
+      <div class="nav-section">
+        <div class="nav-label">LOGS</div>
+        <a href="{{ url_for('logs.live') }}" class="nav-link {% if request.endpoint == 'logs.live' %}active{% endif %}">
+          <span class="nav-icon">▶</span> Live Tail
+        </a>
+        <a href="{{ url_for('logs.index') }}" class="nav-link {% if 'logs.' in (request.endpoint or '') and request.endpoint != 'logs.live' %}active{% endif %}">
+          <span class="nav-icon">≡</span> Browse Logs
+        </a>
+      </div>
+
+      <div class="nav-section">
+        <div class="nav-label">NOTIFICATIONS</div>
+        <a href="{{ url_for('sns.index') }}" class="nav-link {% if 'sns.' in (request.endpoint or '') %}active{% endif %}">
+          <span class="nav-icon">◎</span> SNS Events
+        </a>
+      </div>
+
+      <div class="sidebar-footer">
+        {% if current_user.is_authenticated %}
+        <div class="user-info">
+          <span class="user-dot">●</span>
+          <span>{{ current_user.email }}</span>
+        </div>
+        {% endif %}
+        <button class="theme-toggle" id="theme-toggle" title="Toggle light/dark mode">
+          <span class="theme-toggle-icon" id="theme-icon">☀</span>
+          <span id="theme-label">Light mode</span>
+        </button>
+        {% if current_user.is_authenticated %}
+        <a href="{{ url_for('security.logout') }}" class="nav-link logout">
+          <span class="nav-icon">⏻</span> Sign out
+        </a>
+        {% endif %}
+      </div>
+    </nav>
+
+    <main class="content">
+      <div class="topbar">
+        <div class="topbar-left">
+          <h1 class="page-title">{% block page_title %}{% endblock %}</h1>
+        </div>
+        <div class="topbar-right">
+          <div class="clock" id="clock"></div>
+        </div>
+      </div>
+
+      <div class="content-body">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% for cat, msg in messages %}
+          <div class="flash flash-{{ cat }}">{{ msg }}</div>
+          {% endfor %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+      </div>
+    </main>
+
+  </div>
+
+  <script>
+    // Live clock
+    function tick() {
+      var el = document.getElementById('clock');
+      if (el) el.textContent = new Date().toISOString().replace('T',' ').slice(0,19) + ' UTC';
+    }
+    tick(); setInterval(tick, 1000);
+
+    // Theme toggle
+    var html = document.documentElement;
+    var btn  = document.getElementById('theme-toggle');
+    var icon = document.getElementById('theme-icon');
+    var lbl  = document.getElementById('theme-label');
+
+    function applyTheme(theme) {
+      if (theme === 'light') {
+        html.setAttribute('data-theme', 'light');
+        icon.textContent = '☾';
+        lbl.textContent  = 'Dark mode';
+      } else {
+        html.removeAttribute('data-theme');
+        icon.textContent = '☀';
+        lbl.textContent  = 'Light mode';
+      }
+    }
+
+    // Sync button label to whatever was applied before render
+    applyTheme(localStorage.getItem('logmon-theme') || 'dark');
+
+    btn.addEventListener('click', function() {
+      var current = html.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+      var next = current === 'light' ? 'dark' : 'light';
+      localStorage.setItem('logmon-theme', next);
+      applyTheme(next);
+    });
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

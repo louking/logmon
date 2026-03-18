@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Access Denied – LogMon</title>
+  <script>
+    (function() {
+      var t = localStorage.getItem('logmon-theme');
+      if (t) document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Syne:wght@400;600;700;800&display=swap">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+</head>
+<body>
+  <div class="error-wrap">
+    <div class="error-box">
+      <div class="error-code">403</div>
+      <div class="error-msg">Access denied</div>
+      <div class="error-sub">Your account does not have the <strong>super-admin</strong> role.</div>
+      <div style="margin-top:24px;">
+        <a href="{{ url_for('security.logout') }}" class="btn btn-ghost">Sign out</a>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

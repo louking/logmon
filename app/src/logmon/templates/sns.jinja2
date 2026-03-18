@@ -1,0 +1,52 @@
+{% extends "base.jinja2" %}
+{% block title %}SNS Notifications – LogMonitor{% endblock %}
+{% block page_title %}SNS Notifications{% endblock %}
+
+{% block content %}
+<div class="gap-sm" style="font-size:12px;color:var(--text-muted);">
+  Webhook endpoint: <code style="background:var(--bg3);padding:2px 6px;border-radius:3px;color:var(--cyan);">POST /sns/webhook</code>
+  — configure this as your SNS HTTP subscription URL.
+</div>
+
+{% for s in pagination.items %}
+<div class="sns-card">
+  <div class="sns-card-header">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <span class="badge {% if s.notification_type == 'Notification' %}badge-ok{% else %}badge-grey{% endif %}">
+        {{ s.notification_type }}
+      </span>
+      <span style="font-size:12px;">{{ s.subject or '(no subject)' }}</span>
+    </div>
+    <div class="text-muted" style="font-size:11px;">{{ s.received_at.strftime('%Y-%m-%d %H:%M:%S UTC') }}</div>
+  </div>
+  {% if s.topic_arn %}
+  <div style="padding:4px 16px;font-size:10px;color:var(--text-dim);border-bottom:1px solid var(--border);background:var(--bg);">
+    {{ s.topic_arn }}
+  </div>
+  {% endif %}
+  <div class="sns-card-body">
+    <div class="sns-msg">{{ s.message or '–' }}</div>
+  </div>
+</div>
+{% else %}
+<div class="text-muted">No SNS notifications received yet.</div>
+{% endfor %}
+
+{% if pagination.pages > 1 %}
+<div class="pagination">
+  {% if pagination.has_prev %}
+    <a href="?page={{ pagination.prev_num }}" class="page-link">‹</a>
+  {% endif %}
+  {% for p in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
+    {% if p %}
+      <a href="?page={{ p }}" class="page-link {% if p == pagination.page %}current{% endif %}">{{ p }}</a>
+    {% else %}
+      <span class="page-link" style="color:var(--text-dim);">…</span>
+    {% endif %}
+  {% endfor %}
+  {% if pagination.has_next %}
+    <a href="?page={{ pagination.next_num }}" class="page-link">›</a>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

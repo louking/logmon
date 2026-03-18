@@ -1,5 +1,15 @@
 # see .env for image version env variables
 # see repo/settings/environments for image version env variables for github actions
+x-app-env: &app-env
+  TZ: ${TZ}
+  APP_VER: ${APP_VER}
+  APP_NAME: ${APP_NAME}
+  APP_DATABASE: ${APP_DATABASE}
+  APP_USER: ${APP_DATABASE}
+  APP_PASSWORD_FILE: /run/secrets/appdb-password
+  FLASK_DEBUG: ${FLASK_DEBUG}
+  FLASK_LOGGING_PATH: ${FLASK_LOGGING_PATH}
+
 services:
   db:
     # https://github.com/docker-library/mysql/issues/275#issuecomment-636831964
@@ -58,6 +68,10 @@ services:
       TZ: ${TZ}
       PMA_ABSOLUTE_URI: http://phpmyadmin/phpmyadmin
 
+  # ------------------------------------------------------------------ app
+  # Serves the dashboard UI and SNS webhook.
+  # Scaled freely (--workers N in gunicorn) without spawning extra followers.
+  # Does NOT need access to the host log directories.
   app:
     image: louking/${APP_NAME}-app:${APP_VER}
     build: &app-build
@@ -69,9 +83,9 @@ services:
     depends_on:
       - db
     secrets:
-      - root-password
-      - users-password
-      - appdb-password
+        - root-password
+        - users-password
+        - appdb-password
     networks:
       - backend-network
       - frontend-network
@@ -79,15 +93,8 @@ services:
       - ./config:/config:ro
       - ${DB_INIT_DIR}:/initdb.d
       - ${APP_LOGGING_HOST}:${APP_LOGGING_PATH}
-    environment: &app-env
-      TZ: ${TZ}
-      APP_VER: ${APP_VER}
-      APP_NAME: ${APP_NAME}
-      APP_DATABASE: ${APP_DATABASE}
-      APP_USER: ${APP_DATABASE}
-      APP_PASSWORD_FILE: /run/secrets/appdb-password
-      FLASK_DEBUG: ${FLASK_DEBUG}
-      FLASK_LOGGING_PATH: ${FLASK_LOGGING_PATH}
+    environment: 
+      <<: *app-env
     extra_hosts:
       # see https://stackoverflow.com/a/67158212/799921
       - "host.docker.internal:host-gateway"
@@ -96,6 +103,61 @@ services:
               "--workers=${GUNICORN_WORKERS}", "--threads=${GUNICORN_THREADS}", "--worker-class", "gevent", 
               "--access-logfile", "${ACCESS_LOG}", "--access-logformat", '%({x-forwarded-for}i)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s"', 
               "--timeout", "120", "app_server:app"]
+
+  # ------------------------------------------------------------------ follower
+  # Tails log files and writes events + alerts to the DB.
+  # Runs as a single instance so there is exactly one set of follower threads.
+  # This is the only service that needs the host log directory mounts —
+  # those are added in the gitignored docker-compose.override.yml.
+  follower:
+    image: louking/${APP_NAME}-app:${APP_VER}
+    build: *app-build
+    restart: unless-stopped
+    secrets:
+        - users-password
+        - appdb-password
+    networks:
+      - backend-network
+    volumes:
+      - ./config:/config:ro
+      - ${VAR_LOG_HOST}:/var/log
+      # Host log directory mounts are added in docker-compose.override.yml
+    depends_on:
+      - db
+    environment: 
+      <<: *app-env
+    extra_hosts:
+      # see https://stackoverflow.com/a/67158212/799921
+      - "host.docker.internal:host-gateway"
+    # command: flask follower run
+    command: flask run-follower
+
+  # ------------------------------------------------------------------ crond
+  # Runs cron jobs for maintenance tasks like database backups and log pruning.
+  crond:
+    image: louking/${APP_NAME}-app:${APP_VER}
+    user: root
+    build: *app-build
+    restart: always
+    depends_on:
+      - db
+    networks:
+      - backend-network
+    secrets:
+      - root-password
+      - users-password
+      - appdb-password
+    volumes:
+      - ./config:/config:ro
+      - ./config/msmtprc:/etc/msmtprc:ro
+      - ./config/cronjobs:/etc/crontabs/appuser
+      - ${DB_INIT_DIR}:/initdb.d
+      - ${VAR_LOG_HOST}:/var/log
+      - ${BACKUP_FOLDER_HOST}/${APP_DATABASE}:/backup
+    environment: 
+      <<: *app-env
+    # start crond with log level 8 in foreground, output to stderr
+    command: ["crond", "-f", "-d", "8"]
 
 volumes:
   db-data:

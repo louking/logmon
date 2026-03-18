@@ -1,0 +1,74 @@
+# Copy to docker-compose.override.yml and add to .gitignore.
+# This file supplies secrets for both the web and follower services,
+# and adds the host log directory mounts to the follower service.
+# Docker Compose merges it automatically with docker-compose.yml.
+#
+# Both services use the same image and need the same environment variables,
+# so we define them once using a YAML anchor (&env) and reuse it (<<: *env).
+
+x-app-env: &app-env
+  SECRET_KEY: "replace-with-long-random-string"
+  SECURITY_PASSWORD_SALT: "replace-with-another-random-string"
+
+  # Logmon's own DB (Postgres in this stack)
+  DATABASE_URL: "mysql://logmon:password@db/logmon"
+
+  # Shared users DB — accessed via the 'users' Docker network.
+  # Host is whatever the users-DB container is named on that network.
+  USERS_DATABASE_URL: "mysql://appuser:password@usersdb/users"
+
+  # Mail (used by the follower service to send alert emails)
+  MAIL_SERVER: "smtp.example.com"
+  MAIL_PORT: "587"
+  MAIL_USE_TLS: "true"
+  MAIL_USERNAME: "logmon@example.com"
+  MAIL_PASSWORD: "smtp-password"
+  MAIL_DEFAULT_SENDER: "logmon@example.com"
+  ALERT_RECIPIENTS: "you@example.com,oncall@example.com"
+
+  # Alert suppression window in seconds (default 3600 = 1 hour)
+  ALERT_SUPPRESS_SECONDS: "3600"
+
+  # SNS: comma-separated Topic ARNs to accept (blank = accept all)
+  SNS_TOPIC_ARNS: "arn:aws:sns:us-east-1:123456789012:my-topic"
+
+services:
+  app:
+    environment:
+      <<: *app-env
+
+  follower:
+    environment:
+      <<: *app-env
+    volumes:
+      # HOW VOLUME MOUNTS CONNECT TO config/logapps.yml
+      # -------------------------------------------------
+      # Each line below has the form:
+      #
+      #   - /host/path/to/logs:/container/path:ro
+      #     ^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^
+      #     your server's path    must match log_dir in logapps.yml
+      #
+      # The container path (right of the colon, before :ro) is arbitrary —
+      # but it must be copied verbatim into log_dir in config/logapps.yml.
+      # Nothing enforces this automatically; a mismatch means the follower
+      # silently watches nothing for that app.
+      #
+      # Example pairing:
+      #
+      #   Here:              - /opt/apps/contracts/logs:/logs/contracts:ro
+      #   In logapps.yml:    log_dir: /logs/contracts
+      #
+      # On Windows with spaces in the path, quote the entire string:
+      #   - "C:/Users/you/My Apps/contracts/logs:/logs/contracts:ro"
+      #
+      - /opt/apps/contracts/logs:/logs/contracts:ro   # log_dir: /logs/contracts
+      - /opt/apps/rrwebapp/logs:/logs/rrwebapp:ro     # log_dir: /logs/rrwebapp
+      # Add more as needed — then add a matching entry in config/logapps.yml:
+      # - /opt/apps/myapp/logs:/logs/myapp:ro         # log_dir: /logs/myapp
+
+  db:
+    environment:
+      POSTGRES_DB: logmon
+      POSTGRES_USER: logmon
+      POSTGRES_PASSWORD: password

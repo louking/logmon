@@ -1,0 +1,18 @@
+{% extends "base.jinja2" %}
+{% block title %}Browse Logs – LogMonitor{% endblock %}
+{% block page_title %}Browse Logs{% endblock %}
+
+{% block content %}
+<div class="grid-3">
+  {% for name in app_names %}
+  <a href="{{ url_for('logs.app_log', app_name=name) }}" style="text-decoration:none;">
+    <div class="card" style="padding:20px;transition:border-color 0.15s;" onmouseover="this.style.borderColor='var(--accent2)'" onmouseout="this.style.borderColor='var(--border)'">
+      <div style="font-family:var(--font-display);font-size:14px;font-weight:700;color:var(--text);margin-bottom:6px;">{{ name }}</div>
+      <div style="font-size:11px;color:var(--text-muted);">Click to browse events →</div>
+    </div>
+  </a>
+  {% else %}
+  <div class="text-muted">No apps configured. Add LOG_APPS to your config.</div>
+  {% endfor %}
+</div>
+{% endblock %}

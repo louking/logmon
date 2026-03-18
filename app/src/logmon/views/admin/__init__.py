@@ -8,5 +8,4 @@ bp = Blueprint('admin', __name__.split('.')[0], url_prefix='/admin', static_fold
 
 # superadmin
 from . import home
-from . import logfile
 from . import sysinfo

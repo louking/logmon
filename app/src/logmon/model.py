@@ -1,5 +1,5 @@
 '''
-models - database models for application
+model - database models for application
 ===========================================
 '''
 
@@ -42,14 +42,74 @@ object_mapper = db.object_mapper
 func = db.func
 Base = db.Model
 
-class LogEntry(Base):
-    id = Column(Integer, primary_key=True)
-    timestamp = Column(DateTime, default=func.now())
-    source = Column(String(100))
-    content = Column(Text)
-    is_error = Column(Boolean, default=False)
+class LogEvent(Base):
+    """Persisted log event — errors and exceptions only."""
+    __tablename__ = "log_event"
 
-class SNSEvent(Base):
-    id = Column(Integer, primary_key=True)
-    timestamp = Column(DateTime, default=func.now())
-    content = Column(Text)
+    id = db.Column(db.Integer, primary_key=True)
+    app_name = db.Column(db.String(128), nullable=False, index=True)
+    occurred_at = db.Column(db.DateTime, nullable=False, index=True)
+    level = db.Column(db.String(16), nullable=False)
+    user = db.Column(db.String(255))
+    ip = db.Column(db.String(64))
+    method = db.Column(db.String(16))
+    url = db.Column(db.String(1024))
+    status_code = db.Column(db.Integer)
+    message = db.Column(db.Text)
+    traceback = db.Column(db.Text)
+    exception_type = db.Column(db.String(512), index=True)
+    created_at = db.Column(db.DateTime, default=datetime.now)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "app_name": self.app_name,
+            "occurred_at": self.occurred_at.isoformat() if self.occurred_at else None,
+            "level": self.level,
+            "user": self.user,
+            "ip": self.ip,
+            "method": self.method,
+            "url": self.url,
+            "status_code": self.status_code,
+            "message": self.message,
+            "traceback": self.traceback,
+            "exception_type": self.exception_type,
+        }
+
+
+class AlertSuppression(Base):
+    """Tracks when we last emailed about a particular (app, exception_type) pair."""
+    __tablename__ = "alert_suppression"
+
+    id = db.Column(db.Integer, primary_key=True)
+    app_name = db.Column(db.String(128), nullable=False)
+    exception_type = db.Column(db.String(512), nullable=False)
+    last_alerted_at = db.Column(db.DateTime, nullable=False)
+
+    __table_args__ = (
+        db.UniqueConstraint("app_name", "exception_type", name="uq_app_exc"),
+    )
+
+
+class SnsNotification(Base):
+    __tablename__ = "sns_notification"
+
+    id = db.Column(db.Integer, primary_key=True)
+    received_at = db.Column(db.DateTime, default=datetime.now, index=True)
+    notification_type = db.Column(db.String(64))
+    topic_arn = db.Column(db.String(512))
+    subject = db.Column(db.String(512))
+    message = db.Column(db.Text)
+    message_id = db.Column(db.String(256), unique=True)
+    raw_payload = db.Column(db.Text)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "received_at": self.received_at.isoformat(),
+            "notification_type": self.notification_type,
+            "topic_arn": self.topic_arn,
+            "subject": self.subject,
+            "message": self.message,
+            "message_id": self.message_id,
+        }

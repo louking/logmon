@@ -2,14 +2,43 @@
 settings - define default, test and production settings
 
 see http://flask.pocoo.org/docs/1.0/config/?highlight=production#configuration-best-practices
+
+The list of monitored apps comes from /config/logapps.yml, which is a
+read-only bind mount defined in docker-compose.yml.
 '''
 
 # standard
+import os
 import logging
+import yaml
+from dataclasses import dataclass, field
 
 # homegrown
 from loutilities.configparser import getitems
 
+LOGAPPS_PATH = os.environ.get("LOGAPPS_PATH", "/config/logapps.yml")
+
+@dataclass
+class AppEntry:
+    name: str
+    log_dir: str
+    alert_suppress_seconds: int | None = None   # None → use global default
+
+
+def _load_logapps() -> list[AppEntry]:
+    try:
+        with open(LOGAPPS_PATH) as fh:
+            data = yaml.safe_load(fh) or {}
+        apps = []
+        for name, cfg in (data.get("apps") or {}).items():
+            apps.append(AppEntry(
+                name=name,
+                log_dir=cfg["log_dir"],
+                alert_suppress_seconds=cfg.get("alert_suppress_seconds"),
+            ))
+        return apps
+    except FileNotFoundError:
+        return []
 
 class Config(object):
     DEBUG = False
@@ -37,6 +66,21 @@ class Config(object):
     THISAPP_PRODUCTNAME = '<span class="brand-all"><span class="brand-left">lm</span><span class="brand-right">tility</span></span>'
     THISAPP_PRODUCTNAME_TEXT = 'lmtility'
 
+    # --------------------------------------------------------- alert settings
+    ALERT_RECIPIENTS: list[str] = os.environ.get("ALERT_RECIPIENTS", "").split(",")
+    ALERT_SUPPRESS_SECONDS: int = int(os.environ.get("ALERT_SUPPRESS_SECONDS", 3600))
+
+    # ------------------------------------------------------------ SNS
+    SNS_TOPIC_ARNS_ALLOWED: list[str] = [
+        t.strip() for t in os.environ.get("SNS_TOPIC_ARNS", "").split(",") if t.strip()
+    ]
+
+    # ---------------------------------------------------------- log apps
+    # Loaded once at startup from the mounted YAML file.
+    LOG_APPS: list[AppEntry] = field(default_factory=list)
+
+    # --------------------------------------------------- live-tail ring buffer
+    LOG_TAIL_LINES: int = int(os.environ.get("LOG_TAIL_LINES", 500))
 
 class Testing(Config):
     TESTING = True
@@ -85,6 +129,14 @@ class RealDb(Config):
             self.SQLALCHEMY_BINDS = {
                 'users': usersdb_uri
             }
+
+    @classmethod
+    def load(cls, configfiles) -> "Config":
+        """Return a fully-populated Config instance."""
+        obj = cls(configfiles)
+        obj.LOG_APPS = _load_logapps()
+        return obj
+
 
 
 class Development(RealDb):

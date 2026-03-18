@@ -150,6 +150,7 @@ venv.bak/
 *-config.js
 *_config.py
 config/
+docker-compose.override.yml
 
 # external javascript
 js/

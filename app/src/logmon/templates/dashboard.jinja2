@@ -1,0 +1,131 @@
+{% extends "base.jinja2" %}
+{% block title %}Dashboard – LogMonitor{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+
+{% block content %}
+<!-- Stat tiles -->
+<div class="grid-4 gap">
+  <div class="stat-tile red">
+    <div class="stat-label">Errors (24h)</div>
+    <div class="stat-value" id="stat-errors">–</div>
+    <div class="stat-sub">across all apps</div>
+  </div>
+  <div class="stat-tile">
+    <div class="stat-label">Apps monitored</div>
+    <div class="stat-value">{{ app_counts | length }}</div>
+    <div class="stat-sub">with events today</div>
+  </div>
+  <div class="stat-tile yellow">
+    <div class="stat-label">SNS notifications</div>
+    <div class="stat-value">{{ recent_sns | length }}</div>
+    <div class="stat-sub">recent</div>
+  </div>
+  <div class="stat-tile green">
+    <div class="stat-label">Status</div>
+    <div class="stat-value" style="font-size:18px">● Live</div>
+    <div class="stat-sub">log follower active</div>
+  </div>
+</div>
+
+<!-- Per-app error bar -->
+<div class="gap">
+  <div class="card">
+    <div class="card-header">
+      Errors by app — last 24 h
+      <a href="{{ url_for('logs.index') }}" class="btn btn-ghost" style="padding:3px 10px;font-size:11px;">Browse all →</a>
+    </div>
+    <div class="card-body" style="padding:14px 18px;">
+      {% if app_counts %}
+        {% set max_count = app_counts | map(attribute=1) | max %}
+        {% for app_name, count in app_counts %}
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+          <div style="width:130px;color:var(--text-muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ app_name }}</div>
+          <div style="flex:1;background:var(--bg3);border-radius:2px;height:8px;overflow:hidden;">
+            <div style="height:100%;background:var(--red);opacity:0.7;width:{{ (count / max_count * 100) | int }}%;border-radius:2px;"></div>
+          </div>
+          <div style="width:40px;text-align:right;color:var(--red);font-size:12px;">{{ count }}</div>
+          <a href="{{ url_for('logs.app_log', app_name=app_name) }}" style="font-size:11px;">view</a>
+        </div>
+        {% endfor %}
+      {% else %}
+        <div class="text-muted" style="font-size:12px;">No errors recorded in the last 24 hours.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="grid-2 gap">
+  <!-- Recent errors -->
+  <div class="card">
+    <div class="card-header">Recent Errors</div>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>App</th>
+          <th>Time</th>
+          <th>Exception / URL</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in recent_errors %}
+        <tr>
+          <td><a href="{{ url_for('logs.app_log', app_name=e.app_name) }}">{{ e.app_name }}</a></td>
+          <td class="text-muted" style="white-space:nowrap;">{{ e.occurred_at.strftime('%m-%d %H:%M:%S') }}</td>
+          <td>
+            <a href="{{ url_for('logs.event_detail', app_name=e.app_name, event_id=e.id) }}" class="truncate" style="display:block;max-width:260px;">
+              {{ e.exception_type or e.message or '–' }}
+            </a>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="3" class="text-muted">No errors recorded yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Recent SNS -->
+  <div class="card">
+    <div class="card-header">
+      Recent SNS Notifications
+      <a href="{{ url_for('sns.index') }}" class="btn btn-ghost" style="padding:3px 10px;font-size:11px;">All →</a>
+    </div>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Type</th>
+          <th>Subject</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in recent_sns %}
+        <tr>
+          <td class="text-muted" style="white-space:nowrap;">{{ s.received_at.strftime('%m-%d %H:%M') }}</td>
+          <td><span class="badge badge-grey">{{ s.notification_type }}</span></td>
+          <td class="truncate">{{ s.subject or '–' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="3" class="text-muted">No SNS notifications yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Poll /api/stats every 30s and update the error count tile
+  function refreshStats() {
+    fetch('/api/stats')
+      .then(r => r.json())
+      .then(data => {
+        const total = Object.values(data).reduce((a,b) => a+b, 0);
+        document.getElementById('stat-errors').textContent = total;
+      });
+  }
+  refreshStats();
+  setInterval(refreshStats, 30000);
+</script>
+{% endblock %}

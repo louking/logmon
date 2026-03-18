@@ -1,0 +1,56 @@
+{% extends "base.jinja2" %}
+{% block title %}Event #{{ event.id }} – {{ event.app_name }}{% endblock %}
+{% block page_title %}Event #{{ event.id }}{% endblock %}
+
+{% block content %}
+<div style="margin-bottom:14px;">
+  <a href="{{ url_for('logs.app_log', app_name=event.app_name) }}" class="btn btn-ghost">← Back to {{ event.app_name }}</a>
+</div>
+
+<div class="grid-2 gap">
+  <div class="card">
+    <div class="card-header">Event Details</div>
+    <div class="card-body">
+      <table style="width:100%;font-size:12px;border-collapse:collapse;">
+        {% set rows = [
+          ('App',       event.app_name),
+          ('Time',      event.occurred_at.strftime('%Y-%m-%d %H:%M:%S') if event.occurred_at else '–'),
+          ('Level',     event.level),
+          ('User',      event.user or '–'),
+          ('IP',        event.ip or '–'),
+          ('Method',    event.method or '–'),
+          ('URL',       event.url or '–'),
+          ('Status',    event.status_code or '–'),
+          ('Exception', event.exception_type or '–'),
+        ] %}
+        {% for label, val in rows %}
+        <tr>
+          <td style="padding:5px 12px 5px 0;color:var(--text-muted);width:100px;vertical-align:top;">{{ label }}</td>
+          <td style="padding:5px 0;word-break:break-all;">
+            {% if label == 'Level' and event.level == 'ERROR' %}
+              <span class="badge badge-error">ERROR</span>
+            {% else %}
+              {{ val }}
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">Message</div>
+    <div class="card-body">
+      <div style="font-size:12px;color:var(--text);word-break:break-word;">{{ event.message or '–' }}</div>
+    </div>
+  </div>
+</div>
+
+{% if event.traceback %}
+<div class="gap">
+  <div class="section-title">Traceback</div>
+  <div class="traceback-block">{{ event.traceback }}</div>
+</div>
+{% endif %}
+{% endblock %}
