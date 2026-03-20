@@ -113,3 +113,35 @@ class SnsNotification(Base):
             "message": self.message,
             "message_id": self.message_id,
         }
+
+class AccessEvent(Base):
+    """One line from an nginx access log."""
+    __tablename__ = "access_event"
+
+    id = db.Column(db.Integer, primary_key=True)
+    app_name = db.Column(db.String(128), nullable=False, index=True)
+    occurred_at = db.Column(db.DateTime, nullable=False, index=True)
+    client_ip = db.Column(db.String(64), index=True)   # first IP in X-Forwarded-For
+    ip_chain = db.Column(db.String(256))               # full forwarded chain
+    method = db.Column(db.String(16))
+    path = db.Column(db.String(1024))
+    status_code = db.Column(db.Integer, index=True)
+    bytes_sent = db.Column(db.Integer)
+    referer = db.Column(db.String(1024))
+    user_agent = db.Column(db.String(512))
+    created_at = db.Column(db.DateTime, default=datetime.now)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "app_name": self.app_name,
+            "occurred_at": self.occurred_at.isoformat() if self.occurred_at else None,
+            "client_ip": self.client_ip,
+            "ip_chain": self.ip_chain,
+            "method": self.method,
+            "path": self.path,
+            "status_code": self.status_code,
+            "bytes_sent": self.bytes_sent,
+            "referer": self.referer,
+            "user_agent": self.user_agent,
+        }

@@ -3,18 +3,18 @@ from __future__ import annotations
 from flask import Blueprint, current_app, render_template, request
 from flask_security import login_required
 
-from ..model import db, LogEvent
+from ..model import db
+from ..model import LogEvent
 from .auth import require_super_admin
 
 bp = Blueprint("logs", __name__, url_prefix="/logs")
 bp.before_request(require_super_admin)
 
+
 @bp.route("/")
 @login_required
 def index():
-    # Apps that have events
     db_apps = [r[0] for r in db.session.query(LogEvent.app_name).distinct().all()]
-    # Apps configured but not yet seen
     cfg_apps = [e.name for e in current_app.config.get("LOG_APPS", [])]
     app_names = sorted(set(db_apps) | set(cfg_apps))
     return render_template("logs_index.jinja2", app_names=app_names)

@@ -6,8 +6,9 @@ from flask import Blueprint, jsonify, request
 from flask_security import login_required
 from sqlalchemy import func
 
+from ..model import db
 from ..follower import get_all_tails, get_tail
-from ..model import db, LogEvent, SnsNotification
+from ..model import LogEvent, SnsNotification
 from .auth import require_super_admin
 
 bp = Blueprint("api", __name__, url_prefix="/api")

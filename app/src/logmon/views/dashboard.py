@@ -6,7 +6,8 @@ from flask import Blueprint, render_template
 from flask_security import login_required
 from sqlalchemy import func
 
-from ..model import db, LogEvent, SnsNotification
+from ..model import db
+from ..model import LogEvent, SnsNotification
 from .auth import require_super_admin
 
 bp = Blueprint("dashboard", __name__)

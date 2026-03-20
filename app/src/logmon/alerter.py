@@ -11,7 +11,7 @@ log = logging.getLogger(__name__)
 
 def send_alert(flask_app, event) -> None:
     """Send an alert email for a LogEvent. Must be called inside app context."""
-    from app import mail
+    from .app import mail
 
     recipients = flask_app.config.get("ALERT_RECIPIENTS", [])
     recipients = [r for r in recipients if r.strip()]

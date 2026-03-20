@@ -7,15 +7,18 @@ import urllib.request
 from flask import Blueprint, current_app, jsonify, render_template, request
 from flask_security import login_required
 
-from ..model import db, SnsNotification
+from ..model import db
+from ..model import SnsNotification
 from .auth import require_super_admin
 
 bp = Blueprint("sns", __name__, url_prefix="/sns")
+
 log = logging.getLogger(__name__)
+
 
 @bp.route("/webhook", methods=["POST"])
 def webhook():
-    """Public endpoint — no login required; SNS posts here."""
+    """Public endpoint — no login or role required; SNS posts here."""
     msg_type = request.headers.get("x-amz-sns-message-type", "")
     payload = request.get_json(force=True, silent=True) or {}
     topic_arn = payload.get("TopicArn", "")
@@ -47,9 +50,8 @@ def webhook():
 def _store(payload: dict, msg_type: str) -> None:
     msg_id = payload.get("MessageId")
     if msg_id and SnsNotification.query.filter_by(message_id=msg_id).first():
-        return   # duplicate
+        return
 
-    # SES embeds a JSON string inside Message
     message_text = payload.get("Message", "")
     try:
         inner = json.loads(message_text)

@@ -22,8 +22,20 @@ LOGAPPS_PATH = os.environ.get("LOGAPPS_PATH", "/config/logapps.yml")
 class AppEntry:
     name: str
     log_dir: str
+    # Filenames within log_dir.  Defaults keep the common convention where
+    # both files live in the same directory.  Override in logapps.yml if
+    # your files are named differently.
+    app_log: str | None = None      # defaults to {name}.log  e.g. contracts.log
+    access_log: str | None = None   # defaults to access.log
     alert_suppress_seconds: int | None = None   # None → use global default
 
+    @property
+    def app_log_path(self) -> str:
+        return os.path.join(self.log_dir, self.app_log or f"{self.name}.log")
+
+    @property
+    def access_log_path(self) -> str:
+        return os.path.join(self.log_dir, self.access_log or "access.log")
 
 def _load_logapps() -> list[AppEntry]:
     try:
@@ -34,6 +46,8 @@ def _load_logapps() -> list[AppEntry]:
             apps.append(AppEntry(
                 name=name,
                 log_dir=cfg["log_dir"],
+                app_log=cfg.get("app_log"),
+                access_log=cfg.get("access_log"),
                 alert_suppress_seconds=cfg.get("alert_suppress_seconds"),
             ))
         return apps
