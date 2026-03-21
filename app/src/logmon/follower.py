@@ -12,41 +12,84 @@ FileFollower      – daemon thread per log file; seeks to EOF on start, then
 Each FileFollower is told explicitly which parser to use ("app" or "access")
 so that app logs and access logs in the same directory are never confused.
 
-The in-memory ring buffer (per app) is exposed to the live-tail JSON API
-without hitting the database.
+Live-tail buffer
+----------------
+Lines are pushed to Redis lists keyed  logmon:tail:{app_name}:{kind}  using LPUSH
+and trimmed to LOG_TAIL_LINES entries with LTRIM.  Both the follower service
+and the web/app service connect to the same Redis instance, so the live-tail
+API always sees current data regardless of which process handles the request.
 """
 from __future__ import annotations
 
-import glob
+import json
 import logging
 import os
 import threading
 import time
-from collections import deque
 from datetime import datetime
 from typing import Literal
+
+import redis
 
 log = logging.getLogger(__name__)
 
 ParserType = Literal["app", "access"]
 
-# Per-app ring buffers: {app_name: deque[dict]}
-_tail_buffers: dict[str, deque] = {}
-_tail_lock = threading.Lock()
+REDIS_KEY_PREFIX = "logmon:tail:"  # full key: logmon:tail:{app_name}:{kind}
 
 _manager: "FollowerManager | None" = None
+_redis: redis.Redis | None = None
+
+
+def _get_redis(flask_app) -> redis.Redis:
+    """Return a module-level Redis client, creating it on first call."""
+    global _redis
+    if _redis is None:
+        url = flask_app.config.get("REDIS_URL", "redis://redis:6379/0")
+        _redis = redis.from_url(url, decode_responses=True)
+    return _redis
 
 
 # ------------------------------------------------------------------ public API
 
-def get_tail(app_name: str, n: int = 100) -> list:
-    with _tail_lock:
-        return list(_tail_buffers.get(app_name, deque()))[-n:]
+def get_tail(app_name: str, n: int = 100, kind: str = "app", flask_app=None) -> list:
+    """Return the n most-recent tail entries for app_name and kind from Redis.
+
+    kind is "app" (Flask app log) or "access" (nginx access log).
+    """
+    r = _get_redis(flask_app)
+    key = REDIS_KEY_PREFIX + app_name + ":" + kind
+    # List is stored newest-first (LPUSH); LRANGE 0 n-1 gives the n newest
+    raw_items = r.lrange(key, 0, n - 1)
+    items = []
+    for raw in raw_items:
+        try:
+            items.append(json.loads(raw))
+        except Exception:
+            items.append({"raw": raw, "level": "", "occurred_at": "", "message": raw})
+    return items
 
 
-def get_all_tails(n: int = 50) -> dict:
-    with _tail_lock:
-        return {k: list(v)[-n:] for k, v in _tail_buffers.items()}
+def get_all_tails(n: int = 50, kind: str = "app", flask_app=None) -> dict:
+    """Return the n most-recent tail entries for every known app, for the given kind."""
+    r = _get_redis(flask_app)
+    # Match keys for the requested kind only: logmon:tail:*:{kind}
+    keys = r.keys(REDIS_KEY_PREFIX + "*:" + kind)
+    result = {}
+    for key in keys:
+        # Strip prefix and trailing :{kind} to get the app name
+        app_name = key[len(REDIS_KEY_PREFIX):]
+        if app_name.endswith(":" + kind):
+            app_name = app_name[: -(len(kind) + 1)]
+        raw_items = r.lrange(key, 0, n - 1)
+        items = []
+        for raw in raw_items:
+            try:
+                items.append(json.loads(raw))
+            except Exception:
+                items.append({"raw": raw, "level": "", "occurred_at": "", "message": raw})
+        result[app_name] = items
+    return result
 
 
 def start_follower(flask_app) -> None:
@@ -78,12 +121,7 @@ class FileFollower(threading.Thread):
         self.app_cfg = app_cfg          # AppEntry from config
         self.flask_app = flask_app
         self._stop_event = threading.Event()
-
-        with _tail_lock:
-            _tail_buffers.setdefault(
-                app_name,
-                deque(maxlen=flask_app.config.get("LOG_TAIL_LINES", 500)),
-            )
+        self._tail_maxlen = flask_app.config.get("LOG_TAIL_LINES", 500)
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -96,12 +134,10 @@ class FileFollower(threading.Thread):
         try:
             with open(self.filepath, errors="replace") as fh:
                 fh.seek(0, 2)   # jump to end of file
-
                 if self.parser == "app":
                     self._run_app(fh)
                 else:
                     self._run_access(fh)
-
         except Exception:
             log.exception(
                 "FileFollower crashed: %s / %s", self.app_name, self.filepath
@@ -126,7 +162,7 @@ class FileFollower(threading.Thread):
                 continue
 
             line = line.rstrip("\n")
-            self._push_buffer(line, "app")
+            self._push_redis(line, "app")
 
             if pending is not None:
                 if not is_new_app_record(line):
@@ -157,7 +193,7 @@ class FileFollower(threading.Thread):
                 continue
 
             line = line.rstrip("\n")
-            self._push_buffer(line, "access")
+            self._push_redis(line, "access")
 
             parsed = parse_access_line(line)
             if parsed is None:
@@ -167,7 +203,8 @@ class FileFollower(threading.Thread):
 
     # ---------------------------------------------------------------- helpers
 
-    def _push_buffer(self, raw: str, kind: str) -> None:
+    def _push_redis(self, raw: str, kind: str) -> None:
+        """Push one line to the Redis tail list for this app."""
         from .logparser import parse_app_line, parse_access_line
 
         if kind == "app":
@@ -175,7 +212,11 @@ class FileFollower(threading.Thread):
             entry = {
                 "raw": raw,
                 "level": parsed.get("level", ""),
-                "occurred_at": (parsed.get("occurred_at") or datetime.now()).isoformat(),
+                "occurred_at": (
+                    parsed["occurred_at"].isoformat()
+                    if parsed.get("occurred_at")
+                    else datetime.now().isoformat()
+                ),
                 "message": parsed.get("message", raw[:200]),
             }
         else:
@@ -183,7 +224,11 @@ class FileFollower(threading.Thread):
             entry = {
                 "raw": raw,
                 "level": "",
-                "occurred_at": (parsed.get("occurred_at") or datetime.now()).isoformat(),
+                "occurred_at": (
+                    parsed["occurred_at"].isoformat()
+                    if parsed.get("occurred_at")
+                    else datetime.now().isoformat()
+                ),
                 "message": (
                     f"{parsed['client_ip']} {parsed.get('method','')} "
                     f"{parsed.get('path','')} {parsed.get('status_code','')}"
@@ -191,8 +236,15 @@ class FileFollower(threading.Thread):
                 ),
             }
 
-        with _tail_lock:
-            _tail_buffers[self.app_name].append(entry)
+        try:
+            r = _get_redis(self.flask_app)
+            key = REDIS_KEY_PREFIX + self.app_name + ":" + kind
+            pipe = r.pipeline()
+            pipe.lpush(key, json.dumps(entry))
+            pipe.ltrim(key, 0, self._tail_maxlen - 1)
+            pipe.execute()
+        except Exception:
+            log.exception("Redis push failed for %s", self.app_name)
 
     def _commit_app(self, event: dict, tb_lines: list[str]) -> None:
         self._persist_app_event(event, "\n".join(tb_lines))
@@ -295,11 +347,9 @@ class FollowerManager(threading.Thread):
             self._ensure_follower(entry.app_log_path, "app", entry)
             self._ensure_follower(entry.access_log_path, "access", entry)
 
-    def _ensure_follower(
-        self, filepath: str, parser: ParserType, entry
-    ) -> None:
+    def _ensure_follower(self, filepath: str, parser: ParserType, entry) -> None:
         if not os.path.exists(filepath):
-            return   # file not present yet; will be picked up on next scan
+            return   # not present yet; picked up on next scan
         follower = self._followers.get(filepath)
         if follower is None or not follower.is_alive():
             log.info("(Re)starting %s follower for %s", parser, filepath)

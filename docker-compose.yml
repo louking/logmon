@@ -35,6 +35,15 @@ services:
       - MYSQL_USER=${APP_DATABASE}
       - MYSQL_PASSWORD_FILE=/run/secrets/appdb-password
 
+  # ------------------------------------------------------------------ redis
+  # Shared tail buffer between the follower and app services.
+  # Data is ephemeral (no persistence needed — it's a live-tail buffer).
+  redis:
+    image: redis:${REDIS_VER}-alpine
+    restart: unless-stopped
+    networks:
+      - backend-network
+
   web:
     image: louking/${APP_NAME}-web:${APP_VER}
     build: 
@@ -82,6 +91,7 @@ services:
     restart: always
     depends_on:
       - db
+      - redis
     secrets:
         - root-password
         - users-password
@@ -124,6 +134,7 @@ services:
       # Host log directory mounts are added in docker-compose.override.yml
     depends_on:
       - db
+      - redis
     environment: 
       <<: *app-env
     extra_hosts:

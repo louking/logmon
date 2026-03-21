@@ -1,5 +1,5 @@
 {% extends "base.jinja2" %}
-{% block title %}Live Tail – LogMonitor{% endblock %}
+{% block title %}Live Tail – LogMon{% endblock %}
 {% block page_title %}<span class="live-dot"></span>Live Tail{% endblock %}
 
 {% block content %}
@@ -12,6 +12,20 @@
       {% endfor %}
     </select>
   </form>
+
+  <!-- Log kind toggle -->
+  <div style="display:flex;border:1px solid var(--border2);border-radius:var(--radius);overflow:hidden;">
+    <button class="kind-btn active" id="btn-kind-app"
+            style="padding:5px 12px;font-size:11px;font-family:var(--font-mono);
+                   background:var(--accent2);color:#fff;border:none;cursor:pointer;">
+      App log
+    </button>
+    <button class="kind-btn" id="btn-kind-access"
+            style="padding:5px 12px;font-size:11px;font-family:var(--font-mono);
+                   background:transparent;color:var(--text-muted);border:none;cursor:pointer;">
+      Access log
+    </button>
+  </div>
 
   <label style="font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:6px;">
     <input type="checkbox" id="chk-errors-only" style="accent-color:var(--red);">
@@ -34,17 +48,43 @@
 {% block scripts %}
 <script>
   const SELECTED = {{ selected | tojson }};
-  const terminal = document.getElementById('terminal');
-  const statusEl = document.getElementById('tail-status');
-  let lastTs = null;
-  let errorsOnly = false;
+  const terminal  = document.getElementById('terminal');
+  const statusEl  = document.getElementById('tail-status');
+  const btnApp    = document.getElementById('btn-kind-app');
+  const btnAccess = document.getElementById('btn-kind-access');
 
+  let lastTs     = null;
+  let errorsOnly = false;
+  let kind       = 'app';   // "app" or "access"
+
+  // ---------------------------------------------------------------- kind toggle
+  function setKind(k) {
+    kind = k;
+    lastTs = null;
+    terminal.innerHTML = '';
+    statusEl.textContent = 'switching…';
+
+    const activeStyle   = { background: 'var(--accent2)', color: '#fff' };
+    const inactiveStyle = { background: 'transparent',    color: 'var(--text-muted)' };
+
+    Object.assign(btnApp.style,    k === 'app'    ? activeStyle : inactiveStyle);
+    Object.assign(btnAccess.style, k === 'access' ? activeStyle : inactiveStyle);
+
+    // Errors-only only makes sense for app logs
+    document.getElementById('chk-errors-only').disabled = (k === 'access');
+  }
+
+  btnApp.addEventListener('click',    () => setKind('app'));
+  btnAccess.addEventListener('click', () => setKind('access'));
+
+  // ---------------------------------------------------------------- controls
   document.getElementById('chk-errors-only').addEventListener('change', e => {
     errorsOnly = e.target.checked;
   });
 
   document.getElementById('btn-clear').addEventListener('click', () => {
     terminal.innerHTML = '';
+    lastTs = null;
   });
 
   function autoScroll() {
@@ -53,32 +93,36 @@
     }
   }
 
+  // ---------------------------------------------------------------- rendering
   function addLine(item) {
-    if (errorsOnly && item.level !== 'ERROR') return;
+    if (errorsOnly && kind === 'app' && item.level !== 'ERROR') return;
     const div = document.createElement('div');
-    div.className = 'terminal-line level-' + (item.level || 'INFO');
-    const ts = item.occurred_at ? item.occurred_at.replace('T',' ').slice(0,19) : '';
-    div.textContent = `${ts}  ${item.level || ''}  ${item.message || item.raw || ''}`;
+    div.className = 'terminal-line level-' + (item.level || 'ACCESS');
+    const ts = item.occurred_at ? item.occurred_at.replace('T', ' ').slice(0, 19) : '';
+    div.textContent = `${ts}  ${item.level ? item.level + '  ' : ''}${item.message || item.raw || ''}`;
     terminal.appendChild(div);
-    // Keep DOM lean
     while (terminal.children.length > 1000) terminal.removeChild(terminal.firstChild);
   }
 
+  // ---------------------------------------------------------------- polling
   function poll() {
-    const url = `/api/tail/${SELECTED}?n=100`;
+    const url = `/api/tail/${SELECTED}?n=100&kind=${kind}`;
     fetch(url)
       .then(r => r.json())
       .then(lines => {
         if (!lastTs) {
-          // Initial load – show last 30 lines
-          lines.slice(-30).forEach(addLine);
-          if (lines.length) lastTs = lines[lines.length-1].occurred_at;
+          // Initial load or kind switch — show last 30 lines
+          // API returns newest-first; reverse for chronological display
+          const initial = lines.slice(0, 30).reverse();
+          initial.forEach(addLine);
+          if (lines.length) lastTs = lines[0].occurred_at;
           statusEl.textContent = `${lines.length} buffered lines`;
         } else {
-          const newLines = lines.filter(l => l.occurred_at > lastTs);
+          // Only lines newer than what we've already shown
+          const newLines = lines.filter(l => l.occurred_at > lastTs).reverse();
           newLines.forEach(addLine);
-          if (newLines.length) lastTs = newLines[newLines.length-1].occurred_at;
-          statusEl.textContent = `last update: ${new Date().toISOString().slice(11,19)}`;
+          if (newLines.length) lastTs = lines[0].occurred_at;
+          statusEl.textContent = `last update: ${new Date().toISOString().slice(11, 19)}`;
         }
         autoScroll();
       })

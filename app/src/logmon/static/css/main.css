@@ -355,6 +355,7 @@ a:hover { color: var(--cyan); }
 .terminal-line.level-WARNING { color: var(--yellow); }
 .terminal-line.level-INFO    { color: var(--text); }
 .terminal-line.level-DEBUG   { color: var(--text-muted); }
+.terminal-line.level-ACCESS  { color: var(--cyan); }
 
 .live-dot {
   display: inline-block;

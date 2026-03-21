@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 from flask_security import login_required
 from sqlalchemy import func
 
 from ..model import db
-from ..follower import get_all_tails, get_tail
 from ..model import LogEvent, SnsNotification
+from ..follower import get_all_tails, get_tail
 from .auth import require_super_admin
 
 bp = Blueprint("api", __name__, url_prefix="/api")
@@ -18,13 +18,27 @@ bp.before_request(require_super_admin)
 @bp.route("/tail/<app_name>")
 @login_required
 def tail(app_name: str):
-    return jsonify(get_tail(app_name, request.args.get("n", 100, type=int)))
+    n    = request.args.get("n", 100, type=int)
+    kind = request.args.get("kind", "app")   # "app" or "access"
+    if kind not in ("app", "access"):
+        kind = "app"
+    return jsonify(get_tail(
+        app_name, n, kind=kind,
+        flask_app=current_app._get_current_object(),
+    ))
 
 
 @bp.route("/tail")
 @login_required
 def tail_all():
-    return jsonify(get_all_tails(request.args.get("n", 50, type=int)))
+    n    = request.args.get("n", 50, type=int)
+    kind = request.args.get("kind", "app")
+    if kind not in ("app", "access"):
+        kind = "app"
+    return jsonify(get_all_tails(
+        n, kind=kind,
+        flask_app=current_app._get_current_object(),
+    ))
 
 
 @bp.route("/stats")

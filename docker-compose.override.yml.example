@@ -29,6 +29,10 @@ x-app-env: &app-env
   # Alert suppression window in seconds (default 3600 = 1 hour)
   ALERT_SUPPRESS_SECONDS: "3600"
 
+  # Redis — shared live-tail buffer between the app and follower services.
+  # Must match the service name in docker-compose.yml (default: redis).
+  REDIS_URL: "redis://redis:6379/0"
+
   # SNS: comma-separated Topic ARNs to accept (blank = accept all)
   SNS_TOPIC_ARNS: "arn:aws:sns:us-east-1:123456789012:my-topic"
 
