@@ -96,6 +96,7 @@ services:
         - root-password
         - users-password
         - appdb-password
+        - mail-password
     networks:
       - backend-network
       - frontend-network
@@ -180,6 +181,8 @@ secrets:
     file: config/db/users-password.txt
   appdb-password:
     file: config/db/appdb-password.txt
+  mail-password:
+    file: config/mail-password.txt
 
 networks:
   backend-network:
