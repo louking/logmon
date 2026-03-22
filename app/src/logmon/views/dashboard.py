@@ -10,10 +10,10 @@ from ..model import db
 from ..model import LogEvent, SnsNotification
 from .auth import require_super_admin
 
-bp = Blueprint("dashboard", __name__)
+bp = Blueprint("dashboard", __name__, url_prefix="/dashboard")
 bp.before_request(require_super_admin)
 
-@bp.route("/dashboard")
+@bp.route("/")
 @login_required
 def index():
     recent_errors = (
