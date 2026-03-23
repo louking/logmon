@@ -1,0 +1,57 @@
+# config/logapps.yml
+# Copied to config/logapps.yml (gitignored) and mounted into the container at
+# /app/config/logapps.yml (see docker-compose.yml volumes).
+#
+# HOW THIS FILE CONNECTS TO docker-compose.override.yml
+# -------------------------------------------------------
+# Each app's log directory must be bind-mounted into the container via
+# docker-compose.override.yml, and the container-side path of that mount
+# is what you put in log_dir here.
+#
+# The two halves of a volume mount in docker-compose.override.yml are:
+#
+#   - /host/path/to/logs:/container/path:ro
+#     ^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^
+#     your server's path    must match log_dir below
+#
+# Example pairing:
+#
+#   Here:              - /opt/apps/contracts/logs:/logs/contracts:ro
+#   In logapps.yml:    log_dir: /logs/contracts
+#
+# The host path (left side) is wherever the logs live on your server.
+# The container path (right side) is arbitrary — but it must be identical
+# in both files.  Nothing enforces this automatically; if they don't match
+# the follower will silently find no log files.
+#
+# FILE NAMING
+# -----------
+# Each app directory is expected to contain two log files:
+#
+#   {appname}.log   — Flask app log  (default: contracts.log, rrwebapp.log, etc.)
+#   access.log      — nginx access log
+#
+# The follower starts one thread for each file and uses the correct parser
+# for each.  If your files have different names, override them with the
+# optional app_log and access_log keys shown below.
+
+apps:
+  contracts:
+    log_dir: /logs/contracts        # matches: - ...:/logs/contracts:ro in override
+    # Optional overrides — only needed if your filenames differ from the defaults:
+    # app_log: contracts.log        # bare filename → joined to log_dir
+    # app_log: /logs/contracts/contracts.log  # absolute path → used as-is
+    #
+    # access_log accepts a bare filename or an absolute path.
+    # Use an absolute path when the access log is in a different directory:
+    # access_log: access.log                  # default (inside log_dir)
+    # access_log: /var/log/apache2/contracts_access.log  # different directory
+    #
+    # alert_suppress_seconds: 1800  # default: global ALERT_SUPPRESS_SECONDS
+
+  rrwebapp:
+    log_dir: /logs/rrwebapp         # matches: - ...:/logs/rrwebapp:ro in override
+
+  # Add more apps here — and add a matching volume mount in docker-compose.override.yml:
+  # myapp:
+  #   log_dir: /logs/myapp          # matches: - ...:/logs/myapp:ro in override
