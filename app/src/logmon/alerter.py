@@ -34,7 +34,8 @@ def send_alert(flask_app, event) -> None:
         lines += ["--- Traceback ---", event.traceback]
 
     try:
-        sendmail(subject, fromaddr, recipients, "", text="\n".join(lines))
+        # no html version for now, just text
+        sendmail(subject, fromaddr, recipients, None, text="\n".join(lines))
         log.info("Alert sent: %s / %s", event.app_name, exc_type)
     except Exception:
         log.exception("Failed to send alert email")
