@@ -11,8 +11,8 @@ log = logging.getLogger(__name__)
 
 def send_alert(flask_app, event) -> None:
     """Send an alert email for a LogEvent. Must be called inside app context."""
-    from .app import mail
-
+    from loutilities.flask_helpers.mailer import sendmail
+    
     recipients = flask_app.config.get("ALERT_RECIPIENTS", [])
     recipients = [r for r in recipients if r.strip()]
     if not recipients:
@@ -34,7 +34,7 @@ def send_alert(flask_app, event) -> None:
         lines += ["--- Traceback ---", event.traceback]
 
     try:
-        mail.send(Message(subject=subject, recipients=recipients, body="\n".join(lines)))
+        sendmail(subject=subject, toaddr=recipients, text="\n".join(lines))
         log.info("Alert sent: %s / %s", event.app_name, exc_type)
     except Exception:
         log.exception("Failed to send alert email")
