@@ -17,6 +17,43 @@ from dataclasses import dataclass, field
 from loutilities.configparser import getitems
 
 LOGAPPS_PATH = os.environ.get("LOGAPPS_PATH", "/config/logapps.yml")
+SECRETS_DIR  = os.environ.get("SECRETS_DIR",  "/run/secrets")
+
+def _read_secret(name: str, default: str | None = None) -> str | None:
+    """
+    Read a value from a Docker secret file at /run/secrets/<name>.
+
+    Raises RuntimeError for required secrets (default=None) that are missing.
+    Returns default for optional secrets when the file is absent.
+    """
+    path = os.path.join(SECRETS_DIR, name)
+    try:
+        with open(path) as fh:
+            return fh.read().strip()
+    except FileNotFoundError:
+        if default is not None:
+            return default
+        raise RuntimeError(
+            f"Required secret '{name}' not found at {path}. "
+            f"Create the file or set SECRETS_DIR."
+        )
+
+
+def _inject_password(url: str, password: str) -> str:
+    """
+    Insert a password into a DB connection URL of the form:
+      scheme://user@host/db   →   scheme://user:password@host/db
+
+    The URL comes from an env var (username/host visible in docker inspect
+    is acceptable); the password comes from a secret file (not visible).
+    """
+    if not url or not password:
+        return url
+    at = url.rfind("@")
+    if at == -1:
+        return url
+    return url[:at] + ":" + password + url[at:]
+
 
 @dataclass
 class AppEntry:
@@ -29,13 +66,19 @@ class AppEntry:
     access_log: str | None = None   # defaults to access.log
     alert_suppress_seconds: int | None = None   # None → use global default
 
+    def _resolve(self, value: str | None, default_filename: str) -> str:
+        path = value or default_filename
+        if os.path.isabs(path):
+            return path
+        return os.path.join(self.log_dir, path)
+
     @property
     def app_log_path(self) -> str:
-        return os.path.join(self.log_dir, self.app_log or f"{self.name}.log")
+        return self._resolve(self.app_log, f"{self.name}.log")
 
     @property
     def access_log_path(self) -> str:
-        return os.path.join(self.log_dir, self.access_log or "access.log")
+        return self._resolve(self.access_log, "access.log")
 
 def _load_logapps() -> list[AppEntry]:
     try:
@@ -80,6 +123,15 @@ class Config(object):
     THISAPP_PRODUCTNAME = '<span class="brand-all"><span class="brand-left">lm</span><span class="brand-right">tility</span></span>'
     THISAPP_PRODUCTNAME_TEXT = 'lmtility'
 
+    # -------------------------------------------------------------- flask-mail
+    # commented items are in logmon.cfg; password is read from Docker secret file
+    # MAIL_SERVER         = os.environ.get("MAIL_SERVER", "localhost")
+    # MAIL_PORT           = int(os.environ.get("MAIL_PORT", 587))
+    # MAIL_USE_TLS        = os.environ.get("MAIL_USE_TLS", "true").lower() == "true"
+    # MAIL_USERNAME       = os.environ.get("MAIL_USERNAME")
+    MAIL_PASSWORD       = _read_secret("mail-password", default="")
+    # MAIL_DEFAULT_SENDER = os.environ.get("MAIL_DEFAULT_SENDER", "logmon@example.com")
+
     # --------------------------------------------------------- alert settings
     ALERT_RECIPIENTS: list[str] = os.environ.get("ALERT_RECIPIENTS", "").split(",")
     ALERT_SUPPRESS_SECONDS: int = int(os.environ.get("ALERT_SUPPRESS_SECONDS", 3600))
@@ -88,6 +140,11 @@ class Config(object):
     SNS_TOPIC_ARNS_ALLOWED: list[str] = [
         t.strip() for t in os.environ.get("SNS_TOPIC_ARNS", "").split(",") if t.strip()
     ]
+    # Webhook shared secret — read from Docker secret file.
+    # Include as ?key=<value> in the SNS HTTP subscription URL.
+    # If the file is absent or the value is empty, key checking is disabled
+    # (acceptable in development; not recommended in production).
+    SNS_WEBHOOK_KEY: str | None = _read_secret("sns-webhook-key", default="") or None
 
     # ---------------------------------------------------------- log apps
     # Loaded once at startup from the mounted YAML file.

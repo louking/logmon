@@ -2,8 +2,8 @@
 
 A Flask application that tails logs from multiple Flask apps in a Docker
 Compose stack, displays them in a dashboard, and emails alerts when new
-exception types appear.  nginx access logs are also tailed and stored for
-traffic/firewall analysis.  SNS/SES notifications are received via webhook
+exception types appear.  Access logs (nginx or Apache Combined Log Format) are also tailed and stored
+for traffic/firewall analysis.  SNS/SES notifications are received via webhook
 and shown alongside the log events.
 
 ---
@@ -80,13 +80,11 @@ cp config/logapps.yml.example config/logapps.yml
 
 Edit both files:
 
-**`docker-compose.override.yml`** — fill in:
-- `SECRET_KEY` and `SECURITY_PASSWORD_SALT`
-  (generate with `python -c "import secrets; print(secrets.token_hex(32))"`)
-- `DATABASE_URL` — logmon's own MySQL DB
+**`docker-compose.override.yml`** — fill in non-secret environment variables:
+- `DATABASE_URL` — logmon's own MySQL DB (username and host only, no password)
 - `USERS_DATABASE_URL` — shared users DB reachable via the `users` Docker network
 - `REDIS_URL` — defaults to `redis://redis:6379/0`, matching the compose service name
-- SMTP settings and `ALERT_RECIPIENTS`
+- SMTP settings (`MAIL_SERVER`, `MAIL_USERNAME`, etc.) and `ALERT_RECIPIENTS`
 - `volumes:` under `follower:` — one bind mount per monitored app:
   ```yaml
   - /opt/apps/myapp/logs:/logs/myapp:ro
@@ -96,20 +94,39 @@ Edit both files:
   - "C:/Users/you/My Apps/myapp/logs:/logs/myapp:ro"
   ```
 
+**Secret files** — create these before running `docker compose up`.
+All are gitignored.  Generate random values with:
+`python -c "import secrets; print(secrets.token_hex(32))"`
+
+| File | Contents |
+|------|----------|
+| `config/secret-key.txt` | Flask `SECRET_KEY` |
+| `config/security-password-salt.txt` | Flask-Security password salt |
+| `config/mail-password.txt` | SMTP password |
+| `config/snswebhook-key.txt` | SNS webhook shared secret |
+| `config/db/root-password.txt` | MySQL root password |
+| `config/db/appdb-password.txt` | MySQL password for the logmon user |
+| `config/db/users-password.txt` | MySQL password for the shared users DB user |
+
+Passwords are injected into DB connection strings at startup from the secret
+files, so they never appear in environment variables (which are visible via
+`docker inspect`).
+
 **`config/logapps.yml`** — one entry per app, using the container-side path:
 ```yaml
 apps:
   myapp:
     log_dir: /logs/myapp
     # Optional overrides:
-    # app_log: myapp.log          # default: {appname}.log
-    # access_log: access.log      # default: access.log
+    # app_log: myapp.log          # default: {appname}.log  (bare name joined to log_dir)
+    # access_log: access.log      # default: access.log     (bare name joined to log_dir)
+    # access_log: /var/log/apache2/myapp_access.log  # absolute path — used as-is
     # alert_suppress_seconds: 1800
 ```
 
 The follower expects two files per app directory:
 - `{appname}.log` — Flask app log (parsed for errors and exceptions)
-- `access.log` — nginx Combined Format access log (parsed for traffic analysis)
+- `access.log` — Apache or nginx Combined Log Format access log (parsed for traffic analysis)
 
 ### 2. Create the external Docker network (once, on the host)
 
@@ -189,9 +206,11 @@ The live-tail page polls `/api/tail/<app_name>` every 2 seconds.  Lines are
 pushed to Redis by the `follower` service and read back by the `app` service,
 so the tail works correctly across the two separate processes.
 
-The Redis key is `logmon:tail:{app_name}`, stored newest-first as a JSON list
-capped at `LOG_TAIL_LINES` entries (default 500).  The data is ephemeral —
-Redis has no persistence configured, so the tail resets if Redis restarts.
+Two Redis keys are maintained per app — `logmon:tail:{app_name}:app` and
+`logmon:tail:{app_name}:access` — stored newest-first as JSON lists, each
+capped at `LOG_TAIL_LINES` entries (default 500).  The live-tail page lets
+you switch between the two.  The data is ephemeral — Redis has no persistence
+configured, so the tail resets if Redis restarts.
 
 ---
 
@@ -205,8 +224,19 @@ POST https://yourhost/sns/webhook
 
 The app auto-confirms `SubscriptionConfirmation` requests.  All subsequent
 `Notification` POSTs are stored (deduplicated by `MessageId`) and shown at
-`/sns/`.  The webhook endpoint is intentionally public — it does not require
-login or the super-admin role.
+`/sns/`.  The webhook endpoint does not require login or the super-admin role,
+but is protected by a shared secret key.
+
+The key is read from `config/snswebhook-key.txt`.  Include it as a query
+parameter when creating the SNS HTTP subscription:
+
+```
+https://yourhost/sns/webhook?key=<contents of snswebhook-key.txt>
+```
+
+SNS will include the `?key=` parameter in every POST it makes.  Requests
+with a missing or incorrect key are rejected with 403.  If the secret file
+is empty the key check is disabled (development only).
 
 Restrict accepted topic ARNs via `SNS_TOPIC_ARNS` in `docker-compose.override.yml`.
 

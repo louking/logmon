@@ -1,36 +1,34 @@
 # Copy to docker-compose.override.yml and add to .gitignore.
-# This file supplies secrets for both the web and follower services,
-# and adds the host log directory mounts to the follower service.
+# This file supplies non-secret environment variables and the host log
+# directory mounts for the follower service.
 # Docker Compose merges it automatically with docker-compose.yml.
 #
-# Both services use the same image and need the same environment variables,
-# so we define them once using a YAML anchor (&env) and reuse it (<<: *env).
+# SECRETS are NOT in this file — they are read from files under config/.
+# See the "Secret files to create" section below.
+#
+# Both services use the same image and most of the same environment variables,
+# so we define them once using a YAML anchor (&app-env) and reuse it (<<: *env).
 
 x-app-env: &app-env
-  SECRET_KEY: "replace-with-long-random-string"
-  SECURITY_PASSWORD_SALT: "replace-with-another-random-string"
+  # Logmon's own DB — host is the db service name, password comes from secret file
+  DATABASE_URL: "mysql+mysqldb://logmon@db/logmon"
 
-  # Logmon's own DB (Postgres in this stack)
-  DATABASE_URL: "mysql://logmon:password@db/logmon"
-
-  # Shared users DB — accessed via the 'users' Docker network.
+  # Shared users DB — reachable via the 'users' Docker network.
   # Host is whatever the users-DB container is named on that network.
-  USERS_DATABASE_URL: "mysql://appuser:password@usersdb/users"
+  USERS_DATABASE_URL: "mysql+mysqldb://appuser@usersdb/users"
 
-  # Mail (used by the follower service to send alert emails)
+  # Mail (password comes from secret file)
   MAIL_SERVER: "smtp.example.com"
   MAIL_PORT: "587"
   MAIL_USE_TLS: "true"
   MAIL_USERNAME: "logmon@example.com"
-  MAIL_PASSWORD: "smtp-password"
   MAIL_DEFAULT_SENDER: "logmon@example.com"
   ALERT_RECIPIENTS: "you@example.com,oncall@example.com"
 
   # Alert suppression window in seconds (default 3600 = 1 hour)
   ALERT_SUPPRESS_SECONDS: "3600"
 
-  # Redis — shared live-tail buffer between the app and follower services.
-  # Must match the service name in docker-compose.yml (default: redis).
+  # Redis — shared live-tail buffer (matches service name in docker-compose.yml)
   REDIS_URL: "redis://redis:6379/0"
 
   # SNS: comma-separated Topic ARNs to accept (blank = accept all)
@@ -58,11 +56,6 @@ services:
       # Nothing enforces this automatically; a mismatch means the follower
       # silently watches nothing for that app.
       #
-      # Example pairing:
-      #
-      #   Here:              - /opt/apps/contracts/logs:/logs/contracts:ro
-      #   In logapps.yml:    log_dir: /logs/contracts
-      #
       # On Windows with spaces in the path, quote the entire string:
       #   - "C:/Users/you/My Apps/contracts/logs:/logs/contracts:ro"
       #
@@ -71,8 +64,28 @@ services:
       # Add more as needed — then add a matching entry in config/logapps.yml:
       # - /opt/apps/myapp/logs:/logs/myapp:ro         # log_dir: /logs/myapp
 
+      # If any access log is in a different directory, mount that too:
+      # - /var/log/apache2:/var/log/apache2:ro
+
   db:
     environment:
-      POSTGRES_DB: logmon
-      POSTGRES_USER: logmon
-      POSTGRES_PASSWORD: password
+      MYSQL_USER: logmon
+      MYSQL_DATABASE: logmon
+
+# ------------------------------------------------------------------ Secret files to create
+# Create these files before running docker compose up.
+# All are gitignored via the config/ entry in .gitignore.
+#
+#   config/secret-key.txt              — Flask SECRET_KEY (random hex string)
+#   config/security-password-salt.txt  — Flask-Security password salt (random hex)
+#   config/mail-password.txt           — SMTP password
+#   config/snswebhook-key.txt          — SNS webhook shared secret key
+#   config/db/root-password.txt        — MySQL root password
+#   config/db/appdb-password.txt       — MySQL password for the logmon user
+#   config/db/users-password.txt       — MySQL password for the shared users DB user
+#
+# Generate random values for secret-key.txt and security-password-salt.txt:
+#   python -c "import secrets; print(secrets.token_hex(32))"
+#
+# SNS webhook URL to configure in AWS (key is read from snswebhook-key.txt):
+#   https://yourhost/sns/webhook?key=<contents of snswebhook-key.txt>

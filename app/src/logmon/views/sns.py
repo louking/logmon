@@ -18,7 +18,20 @@ log = logging.getLogger(__name__)
 
 @bp.route("/webhook", methods=["POST"])
 def webhook():
-    """Public endpoint — no login or role required; SNS posts here."""
+    """Public endpoint — no login or role required; SNS posts here.
+
+    Protected by a shared secret key passed as ?key=<value> in the URL.
+    Configure the key in config/snswebhook-key.txt and include it in the
+    SNS HTTP subscription URL:  https://yourhost/sns/webhook?key=<value>
+    """
+    # Key check — if SNS_WEBHOOK_KEY is set, the request must supply it
+    expected_key = current_app.config.get("SNS_WEBHOOK_KEY")
+    if expected_key:
+        provided_key = request.args.get("key", "")
+        if not provided_key or provided_key != expected_key:
+            log.warning("SNS webhook: rejected request with invalid or missing key")
+            return jsonify({"error": "forbidden"}), 403
+
     msg_type = request.headers.get("x-amz-sns-message-type", "")
     payload = request.get_json(force=True, silent=True) or {}
     topic_arn = payload.get("TopicArn", "")

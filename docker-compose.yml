@@ -97,6 +97,7 @@ services:
         - users-password
         - appdb-password
         - mail-password
+        - sns-webhook-key
     networks:
       - backend-network
       - frontend-network
@@ -183,6 +184,8 @@ secrets:
     file: config/db/appdb-password.txt
   mail-password:
     file: config/mail-password.txt
+  sns-webhook-key:
+    file: config/sns-webhook-key.txt
 
 networks:
   backend-network:
