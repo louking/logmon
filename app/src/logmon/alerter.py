@@ -4,7 +4,6 @@ alerter.py — Send alert emails via Flask-Mail.
 from __future__ import annotations
 
 import logging
-from flask_mail import Message
 
 log = logging.getLogger(__name__)
 
@@ -21,6 +20,7 @@ def send_alert(flask_app, event) -> None:
 
     exc_type = event.exception_type or "Unknown exception"
     subject = f"[logmonitor] {event.app_name}: {exc_type[:80]}"
+    fromaddr = flask_app.config.get("ALERT_FROM", flask_app.config.get('MAIL_DEFAULT_SENDER', None))
 
     lines = [
         f"App:       {event.app_name}",
@@ -34,7 +34,7 @@ def send_alert(flask_app, event) -> None:
         lines += ["--- Traceback ---", event.traceback]
 
     try:
-        sendmail(subject=subject, toaddr=recipients, text="\n".join(lines))
+        sendmail(subject, fromaddr, recipients, "", text="\n".join(lines))
         log.info("Alert sent: %s / %s", event.app_name, exc_type)
     except Exception:
         log.exception("Failed to send alert email")
