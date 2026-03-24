@@ -129,6 +129,7 @@ services:
         - users-password
         - appdb-password
         - mail-password
+        - sns-webhook-key
     networks:
       - backend-network
     volumes:
