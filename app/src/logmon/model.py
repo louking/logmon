@@ -115,7 +115,7 @@ class SnsNotification(Base):
         }
 
 class AccessEvent(Base):
-    """One line from an nginx access log."""
+    """One line from an access log."""
     __tablename__ = "access_event"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -124,7 +124,7 @@ class AccessEvent(Base):
     client_ip = db.Column(db.String(64), index=True)   # first IP in X-Forwarded-For
     ip_chain = db.Column(db.String(256))               # full forwarded chain
     method = db.Column(db.String(16))
-    path = db.Column(db.String(1024))
+    path = db.Column(db.Text)
     status_code = db.Column(db.Integer, index=True)
     bytes_sent = db.Column(db.Integer)
     referer = db.Column(db.String(1024))
