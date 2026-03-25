@@ -66,6 +66,10 @@ class AppEntry:
     access_log: str | None = None   # defaults to access.log
     alert_suppress_seconds: int | None = None   # None → use global default
 
+    @property
+    def app_log_enabled(self) -> bool:
+        return self.app_log is not False
+
     def _resolve(self, value: str | None, default_filename: str) -> str:
         path = value or default_filename
         if os.path.isabs(path):
