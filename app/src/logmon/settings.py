@@ -55,6 +55,8 @@ def _inject_password(url: str, password: str) -> str:
     return url[:at] + ":" + password + url[at:]
 
 
+# ------------------------------------------------------------------ AppEntry
+
 @dataclass
 class AppEntry:
     name: str
@@ -71,9 +73,13 @@ class AppEntry:
 
     @property
     def app_log_enabled(self) -> bool:
-        return self.app_log is not False
+        return self.app_log is not None and self.app_log is not False
 
-    def _resolve(self, value: str | None, default_filename: str) -> str:
+    def _resolve(self, value: str | bool | None, default_filename: str) -> str:
+        # False means disabled — callers should check app_log_enabled first,
+        # but guard here too so a stray call never raises TypeError.
+        if value is False:
+            return ""
         path = value or default_filename
         if os.path.isabs(path):
             return path
@@ -81,6 +87,7 @@ class AppEntry:
 
     @property
     def app_log_path(self) -> str:
+        """Returns empty string when app log is disabled — check app_log_enabled first."""
         return self._resolve(self.app_log, f"{self.name}.log")
 
     @property

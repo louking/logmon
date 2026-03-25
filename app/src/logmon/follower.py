@@ -351,6 +351,8 @@ class FollowerManager(threading.Thread):
             self._ensure_follower(entry.access_log_path, "access", entry)
 
     def _ensure_follower(self, filepath: str, parser: ParserType, entry) -> None:
+        if not filepath:
+            return   # disabled (e.g. app_log: false)
         if not os.path.exists(filepath):
             return   # not present yet; picked up on next scan
         follower = self._followers.get(filepath)
