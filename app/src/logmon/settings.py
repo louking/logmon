@@ -61,33 +61,42 @@ def _inject_password(url: str, password: str) -> str:
 class AppEntry:
     name: str
     log_dir: str
-    # Each of these accepts either:
-    #   - a bare filename  → joined to log_dir  e.g. "contracts.log"
-    #   - an absolute path → used as-is         e.g. "/var/log/apache2/access.log"
-    # Defaults: {name}.log and access.log inside log_dir.
-    # Set app_log to False to disable the app log follower entirely for this
-    # app (e.g. a PHP/WordPress app that has no Flask app log).
-    app_log: str | bool | None = None   # None → default filename; False → disabled
+    # app_log accepts:
+    #   None or omitted  → default filename ({name}.log inside log_dir)
+    #   a filename/path  → bare name joined to log_dir, or absolute path used as-is
+    #   False            → app log follower disabled (e.g. PHP/WordPress apps)
+    # YAML: app_log: false  or  app_log: myapp.log  or omit entirely
+    app_log: str | bool | None = None
     access_log: str | None = None
     alert_suppress_seconds: int | None = None   # None → use global default
 
+    def __post_init__(self):
+        # Normalise app_log so app_log_enabled works regardless of how the
+        # value arrived (YAML bool, YAML string, direct construction):
+        #   Python False  → keep as False  (disabled)
+        #   string "false"→ False          (disabled)
+        #   None/omitted  → keep as None   (use default filename)
+        #   any string    → keep as-is     (explicit filename/path)
+        if isinstance(self.app_log, str) and self.app_log.lower() == "false":
+            self.app_log = False
+
     @property
     def app_log_enabled(self) -> bool:
-        return self.app_log is not None and self.app_log is not False
+        """True unless app_log was explicitly set to False (or the string 'false')."""
+        return self.app_log is not False
 
     def _resolve(self, value: str | bool | None, default_filename: str) -> str:
-        # False means disabled — callers should check app_log_enabled first,
-        # but guard here too so a stray call never raises TypeError.
+        """Return an absolute path. Returns empty string if value is False (disabled)."""
         if value is False:
             return ""
-        path = value or default_filename
+        path = value if isinstance(value, str) else default_filename
         if os.path.isabs(path):
             return path
         return os.path.join(self.log_dir, path)
 
     @property
     def app_log_path(self) -> str:
-        """Returns empty string when app log is disabled — check app_log_enabled first."""
+        """Returns resolved path, or empty string when app log is disabled."""
         return self._resolve(self.app_log, f"{self.name}.log")
 
     @property
@@ -101,23 +110,18 @@ def _load_logapps() -> list[AppEntry]:
             data = yaml.safe_load(fh) or {}
         apps = []
         for name, cfg in (data.get("apps") or {}).items():
-            # app_log: False disables app log follower (e.g. for PHP apps)
-            raw_app_log = cfg.get("app_log", None)
-            if raw_app_log is False or str(raw_app_log).lower() == "false":
-                app_log = False
-            else:
-                app_log = raw_app_log or None
-
             apps.append(AppEntry(
                 name=name,
                 log_dir=cfg["log_dir"],
-                app_log=app_log,
+                # app_log: false in YAML → bool False → __post_init__ normalises to sentinel
+                app_log=cfg.get("app_log", None),
                 access_log=cfg.get("access_log"),
                 alert_suppress_seconds=cfg.get("alert_suppress_seconds"),
             ))
         return apps
     except FileNotFoundError:
         return []
+
 
 class Config(object):
     DEBUG = False
