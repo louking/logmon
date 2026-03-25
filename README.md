@@ -22,9 +22,9 @@ logmon/
 └── app/
     ├── Dockerfile
     └── src/
-        ├── wsgi.py                  # WSGI entry point + CLI commands
-        ├── app.py                   # application factory
-        ├── config.py                # all configuration + AppEntry dataclass
+        ├── app_server.py            # WSGI entry point for gunicorn
+        ├── app.py                   # application factory + CLI commands
+        ├── settings.py              # configuration + AppEntry dataclass
         ├── model.py                 # SQLAlchemy models (merge into your own)
         ├── follower.py              # background log-tail threads + Redis buffer
         ├── logparser.py             # app log + access log parsers
@@ -45,8 +45,7 @@ logmon/
         │   ├── event_detail.jinja2
         │   ├── sns.jinja2
         │   ├── 403.jinja2
-        │   └── security/
-        │       └── login_user.jinja2
+        │   └── (security/ templates provided by loutilities)
         └── static/
             └── css/
                 └── main.css
@@ -84,7 +83,7 @@ Edit both files:
 - `DATABASE_URL` — logmon's own MySQL DB (username and host only, no password)
 - `USERS_DATABASE_URL` — shared users DB reachable via the `users` Docker network
 - `REDIS_URL` — defaults to `redis://redis:6379/0`, matching the compose service name
-- SMTP settings (`MAIL_SERVER`, `MAIL_USERNAME`, etc.) and `ALERT_RECIPIENTS`
+- SMTP settings (`MAIL_SERVER`, `MAIL_USERNAME`, etc.), `ALERT_RECIPIENTS`, and optionally `ALERT_FROM` (dedicated sender address for alert emails; falls back to `MAIL_DEFAULT_SENDER`)
 - `volumes:` under `follower:` — one bind mount per monitored app:
   ```yaml
   - /opt/apps/myapp/logs:/logs/myapp:ro
@@ -153,15 +152,15 @@ docker compose up -d --build
 
 First run — initialise the migrations folder:
 ```bash
-docker compose exec app flask db init
-docker compose exec app flask db migrate -m "init"
-docker compose exec app flask db upgrade
+docker compose exec app flask --app app db init
+docker compose exec app flask --app app db migrate -m "init"
+docker compose exec app flask --app app db upgrade
 ```
 
 Subsequent runs after model changes:
 ```bash
-docker compose exec app flask db migrate -m "description"
-docker compose exec app flask db upgrade
+docker compose exec app flask --app app db migrate -m "description"
+docker compose exec app flask --app app db upgrade
 ```
 
 > The **users DB is never migrated by logmon** — it is managed by your
@@ -172,7 +171,7 @@ docker compose exec app flask db upgrade
 Users must hold the **`super-admin`** role to access logmon.
 
 ```bash
-docker compose exec app flask create-user --admin
+docker compose exec app flask --app app create-user --admin
 # Enter email and password at the prompts
 # --admin assigns the super-admin role
 ```
