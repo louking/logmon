@@ -59,11 +59,14 @@ def _inject_password(url: str, password: str) -> str:
 class AppEntry:
     name: str
     log_dir: str
-    # Filenames within log_dir.  Defaults keep the common convention where
-    # both files live in the same directory.  Override in logapps.yml if
-    # your files are named differently.
-    app_log: str | None = None      # defaults to {name}.log  e.g. contracts.log
-    access_log: str | None = None   # defaults to access.log
+    # Each of these accepts either:
+    #   - a bare filename  → joined to log_dir  e.g. "contracts.log"
+    #   - an absolute path → used as-is         e.g. "/var/log/apache2/access.log"
+    # Defaults: {name}.log and access.log inside log_dir.
+    # Set app_log to False to disable the app log follower entirely for this
+    # app (e.g. a PHP/WordPress app that has no Flask app log).
+    app_log: str | bool | None = None   # None → default filename; False → disabled
+    access_log: str | None = None
     alert_suppress_seconds: int | None = None   # None → use global default
 
     @property
@@ -84,16 +87,24 @@ class AppEntry:
     def access_log_path(self) -> str:
         return self._resolve(self.access_log, "access.log")
 
+
 def _load_logapps() -> list[AppEntry]:
     try:
         with open(LOGAPPS_PATH) as fh:
             data = yaml.safe_load(fh) or {}
         apps = []
         for name, cfg in (data.get("apps") or {}).items():
+            # app_log: False disables app log follower (e.g. for PHP apps)
+            raw_app_log = cfg.get("app_log", None)
+            if raw_app_log is False or str(raw_app_log).lower() == "false":
+                app_log = False
+            else:
+                app_log = raw_app_log or None
+
             apps.append(AppEntry(
                 name=name,
                 log_dir=cfg["log_dir"],
-                app_log=cfg.get("app_log"),
+                app_log=app_log,
                 access_log=cfg.get("access_log"),
                 alert_suppress_seconds=cfg.get("alert_suppress_seconds"),
             ))
