@@ -1,5 +1,5 @@
 """
-alerter.py — Send alert emails via Flask-Mail.
+alerter.py — Send alert emails via loutilities mailer.
 """
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ log = logging.getLogger(__name__)
 def send_alert(flask_app, event) -> None:
     """Send an alert email for a LogEvent. Must be called inside app context."""
     from loutilities.flask_helpers.mailer import sendmail
-    
+
     recipients = flask_app.config.get("ALERT_RECIPIENTS", [])
     recipients = [r for r in recipients if r.strip()]
     if not recipients:
@@ -19,8 +19,12 @@ def send_alert(flask_app, event) -> None:
         return
 
     exc_type = event.exception_type or "Unknown exception"
-    subject = f"[logmonitor] {event.app_name}: {exc_type[:80]}"
-    fromaddr = flask_app.config.get("ALERT_FROM", flask_app.config.get('MAIL_DEFAULT_SENDER', None))
+    subject = f"[logmon] {event.app_name}: {exc_type[:80]}"
+
+    fromaddr = flask_app.config.get(
+        "ALERT_FROM",
+        flask_app.config.get("MAIL_DEFAULT_SENDER", None),
+    )
 
     lines = [
         f"App:       {event.app_name}",
