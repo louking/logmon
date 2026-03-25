@@ -118,7 +118,7 @@ class FileFollower(threading.Thread):
         self.app_name = app_name
         self.filepath = filepath
         self.parser = parser            # "app" or "access"
-        self.app_cfg = app_cfg          # AppEntry from config
+        self.app_cfg = app_cfg          # AppEntry from settings
         self.flask_app = flask_app
         self._stop_event = threading.Event()
         self._tail_maxlen = flask_app.config.get("LOG_TAIL_LINES", 500)
@@ -344,7 +344,10 @@ class FollowerManager(threading.Thread):
     def _scan(self) -> None:
         log_apps: list = self.flask_app.config.get("LOG_APPS", [])
         for entry in log_apps:
-            self._ensure_follower(entry.app_log_path, "app", entry)
+            if entry.app_log_enabled:
+                self._ensure_follower(entry.app_log_path, "app", entry)
+            else:
+                log.debug("App log follower disabled for %s", entry.name)
             self._ensure_follower(entry.access_log_path, "access", entry)
 
     def _ensure_follower(self, filepath: str, parser: ParserType, entry) -> None:
