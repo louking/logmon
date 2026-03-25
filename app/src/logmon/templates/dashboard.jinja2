@@ -1,5 +1,5 @@
 {% extends "base.jinja2" %}
-{% block title %}Dashboard – LogMonitor{% endblock %}
+{% block title %}Dashboard – LogMon{% endblock %}
 {% block page_title %}Dashboard{% endblock %}
 
 {% block content %}
@@ -12,12 +12,12 @@
   </div>
   <div class="stat-tile">
     <div class="stat-label">Apps monitored</div>
-    <div class="stat-value">{{ app_counts | length }}</div>
+    <div class="stat-value" id="stat-apps">–</div>
     <div class="stat-sub">with events today</div>
   </div>
   <div class="stat-tile yellow">
     <div class="stat-label">SNS notifications</div>
-    <div class="stat-value">{{ recent_sns | length }}</div>
+    <div class="stat-value" id="stat-sns">–</div>
     <div class="stat-sub">recent</div>
   </div>
   <div class="stat-tile green">
@@ -34,22 +34,8 @@
       Errors by app — last 24 h
       <a href="{{ url_for('logs.index') }}" class="btn btn-ghost" style="padding:3px 10px;font-size:11px;">Browse all →</a>
     </div>
-    <div class="card-body" style="padding:14px 18px;">
-      {% if app_counts %}
-        {% set max_count = app_counts | map(attribute=1) | max %}
-        {% for app_name, count in app_counts %}
-        <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
-          <div style="width:130px;color:var(--text-muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ app_name }}</div>
-          <div style="flex:1;background:var(--bg3);border-radius:2px;height:8px;overflow:hidden;">
-            <div style="height:100%;background:var(--red);opacity:0.7;width:{{ (count / max_count * 100) | int }}%;border-radius:2px;"></div>
-          </div>
-          <div style="width:40px;text-align:right;color:var(--red);font-size:12px;">{{ count }}</div>
-          <a href="{{ url_for('logs.app_log', app_name=app_name) }}" style="font-size:11px;">view</a>
-        </div>
-        {% endfor %}
-      {% else %}
-        <div class="text-muted" style="font-size:12px;">No errors recorded in the last 24 hours.</div>
-      {% endif %}
+    <div class="card-body" style="padding:14px 18px;" id="app-error-bars">
+      <div class="text-muted" style="font-size:12px;">Loading…</div>
     </div>
   </div>
 </div>
@@ -66,20 +52,8 @@
           <th>Exception / URL</th>
         </tr>
       </thead>
-      <tbody>
-        {% for e in recent_errors %}
-        <tr>
-          <td><a href="{{ url_for('logs.app_log', app_name=e.app_name) }}">{{ e.app_name }}</a></td>
-          <td class="text-muted" style="white-space:nowrap;">{{ e.occurred_at.strftime('%m-%d %H:%M:%S') }}</td>
-          <td>
-            <a href="{{ url_for('logs.event_detail', app_name=e.app_name, event_id=e.id) }}" class="truncate" style="display:block;max-width:260px;">
-              {{ e.exception_type or e.message or '–' }}
-            </a>
-          </td>
-        </tr>
-        {% else %}
-        <tr><td colspan="3" class="text-muted">No errors recorded yet.</td></tr>
-        {% endfor %}
+      <tbody id="recent-errors-body">
+        <tr><td colspan="3" class="text-muted">Loading…</td></tr>
       </tbody>
     </table>
   </div>
@@ -98,16 +72,8 @@
           <th>Subject</th>
         </tr>
       </thead>
-      <tbody>
-        {% for s in recent_sns %}
-        <tr>
-          <td class="text-muted" style="white-space:nowrap;">{{ s.received_at.strftime('%m-%d %H:%M') }}</td>
-          <td><span class="badge badge-grey">{{ s.notification_type }}</span></td>
-          <td class="truncate">{{ s.subject or '–' }}</td>
-        </tr>
-        {% else %}
-        <tr><td colspan="3" class="text-muted">No SNS notifications yet.</td></tr>
-        {% endfor %}
+      <tbody id="recent-sns-body">
+        <tr><td colspan="3" class="text-muted">Loading…</td></tr>
       </tbody>
     </table>
   </div>
@@ -116,16 +82,99 @@
 
 {% block scripts %}
 <script>
-  // Poll /api/stats every 30s and update the error count tile
+  const LOG_URL   = {{ url_for('logs.app_log', app_name='__APP__') | tojson }};
+  const EVENT_URL = {{ url_for('logs.event_detail', app_name='__APP__', event_id=0) | tojson }};
+
+  function appLogUrl(appName) {
+    return LOG_URL.replace('__APP__', encodeURIComponent(appName));
+  }
+  function eventUrl(appName, eventId) {
+    return EVENT_URL
+      .replace('__APP__', encodeURIComponent(appName))
+      .replace('0', eventId);
+  }
+
+  // ---------------------------------------------------------------- stats + bars
   function refreshStats() {
     fetch('/api/stats')
       .then(r => r.json())
       .then(data => {
-        const total = Object.values(data).reduce((a,b) => a+b, 0);
+        const entries = Object.entries(data);
+        const total = entries.reduce((a, [, v]) => a + v, 0);
         document.getElementById('stat-errors').textContent = total;
+        document.getElementById('stat-apps').textContent  = entries.length;
+
+        const barsEl = document.getElementById('app-error-bars');
+        if (!entries.length) {
+          barsEl.innerHTML = '<div class="text-muted" style="font-size:12px;">No errors recorded in the last 24 hours.</div>';
+          return;
+        }
+        const maxCount = Math.max(...entries.map(([, v]) => v));
+        barsEl.innerHTML = entries.map(([appName, count]) => `
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+            <div style="width:130px;color:var(--text-muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${appName}</div>
+            <div style="flex:1;background:var(--bg3);border-radius:2px;height:8px;overflow:hidden;">
+              <div style="height:100%;background:var(--red);opacity:0.7;width:${Math.round(count/maxCount*100)}%;border-radius:2px;"></div>
+            </div>
+            <div style="width:40px;text-align:right;color:var(--red);font-size:12px;">${count}</div>
+            <a href="${appLogUrl(appName)}" style="font-size:11px;">view</a>
+          </div>`).join('');
       });
   }
-  refreshStats();
-  setInterval(refreshStats, 30000);
+
+  // ---------------------------------------------------------------- recent errors
+  function refreshErrors() {
+    fetch('/api/recent_errors?n=20')
+      .then(r => r.json())
+      .then(events => {
+        const tbody = document.getElementById('recent-errors-body');
+        if (!events.length) {
+          tbody.innerHTML = '<tr><td colspan="3" class="text-muted">No errors recorded yet.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = events.map(e => {
+          const ts   = e.occurred_at ? e.occurred_at.replace('T',' ').slice(0,19) : '–';
+          const label = e.exception_type || e.message || '–';
+          const truncated = label.length > 60 ? label.slice(0,60) + '…' : label;
+          return `<tr>
+            <td><a href="${appLogUrl(e.app_name)}">${e.app_name}</a></td>
+            <td class="text-muted" style="white-space:nowrap;">${ts}</td>
+            <td><a href="${eventUrl(e.app_name, e.id)}" class="truncate" style="display:block;max-width:260px;" title="${label}">${truncated}</a></td>
+          </tr>`;
+        }).join('');
+      });
+  }
+
+  // ---------------------------------------------------------------- recent SNS
+  function refreshSns() {
+    fetch('/api/sns/recent?n=10')
+      .then(r => r.json())
+      .then(items => {
+        const tbody = document.getElementById('recent-sns-body');
+        document.getElementById('stat-sns').textContent = items.length;
+        if (!items.length) {
+          tbody.innerHTML = '<tr><td colspan="3" class="text-muted">No SNS notifications yet.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = items.map(s => {
+          const ts = s.received_at ? s.received_at.replace('T',' ').slice(0,16) : '–';
+          return `<tr>
+            <td class="text-muted" style="white-space:nowrap;">${ts}</td>
+            <td><span class="badge badge-grey">${s.notification_type || ''}</span></td>
+            <td class="truncate">${s.subject || '–'}</td>
+          </tr>`;
+        }).join('');
+      });
+  }
+
+  // ---------------------------------------------------------------- boot + interval
+  function refreshAll() {
+    refreshStats();
+    refreshErrors();
+    refreshSns();
+  }
+
+  refreshAll();
+  setInterval(refreshAll, 30000);
 </script>
 {% endblock %}
