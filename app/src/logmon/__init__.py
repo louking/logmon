@@ -60,6 +60,12 @@ def create_app(config_obj, configfiles=None, init_for_operation=True):
     # define product name (don't import nav until after app.jinja_env.globals['_productname'] set)
     app.jinja_env.globals['_productname'] = app.config['THISAPP_PRODUCTNAME']
     app.jinja_env.globals['_productname_text'] = app.config['THISAPP_PRODUCTNAME_TEXT']
+
+    # Make app version available in all templates
+    from logmon.version import __version__
+    app.jinja_env.globals['_appversion'] = __version__
+
+    # format security email subjects with product name
     for configkey in ['SECURITY_EMAIL_SUBJECT_PASSWORD_RESET',
                       'SECURITY_EMAIL_SUBJECT_PASSWORD_CHANGE_NOTICE',
                       'SECURITY_EMAIL_SUBJECT_PASSWORD_NOTICE',

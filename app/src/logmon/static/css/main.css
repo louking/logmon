@@ -145,6 +145,13 @@ a:hover { color: var(--cyan); }
 .user-dot { color: var(--green); font-size: 8px; }
 .nav-link.logout { color: var(--text-dim); }
 
+.version-info {
+  padding: 4px 18px 6px;
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 0.06em;
+}
+
 /* theme toggle button */
 .theme-toggle {
   display: flex;

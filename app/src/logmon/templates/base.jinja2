@@ -60,6 +60,9 @@
           <span class="theme-toggle-icon" id="theme-icon">☀</span>
           <span id="theme-label">Light mode</span>
         </button>
+        {% if _appversion is defined %}
+        <div class="version-info">v{{ _appversion }}</div>
+        {% endif %}
         {% if current_user.is_authenticated %}
         <a href="{{ url_for('security.logout') }}" class="nav-link logout">
           <span class="nav-icon">⏻</span> Sign out
