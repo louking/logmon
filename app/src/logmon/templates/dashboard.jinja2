@@ -1,4 +1,5 @@
 {% extends "base.jinja2" %}
+
 {% block title %}Dashboard – LogMon{% endblock %}
 {% block page_title %}Dashboard{% endblock %}
 
@@ -24,6 +25,19 @@
     <div class="stat-label">Status</div>
     <div class="stat-value" style="font-size:18px">● Live</div>
     <div class="stat-sub">log follower active</div>
+  </div>
+</div>
+
+<!-- Bad-actor alert tile — hidden until at least one IP breaches the threshold -->
+<div class="gap" id="bad-actor-alert" style="display:none;">
+  <div class="card" style="border-left:4px solid var(--red);">
+    <div class="card-header" style="color:var(--red);">
+      ⚠ Bad Actors Detected
+      <a href="{{ url_for('access.index') }}" class="btn btn-ghost" style="padding:3px 10px;font-size:11px;">View report →</a>
+    </div>
+    <div class="card-body" style="padding:10px 18px;" id="bad-actor-body">
+      <div class="text-muted" style="font-size:12px;">Loading…</div>
+    </div>
   </div>
 </div>
 
@@ -78,103 +92,134 @@
     </table>
   </div>
 </div>
+
 {% endblock %}
 
 {% block scripts %}
 <script>
-  const LOG_URL   = {{ url_for('logs.app_log', app_name='__APP__') | tojson }};
-  const EVENT_URL = {{ url_for('logs.event_detail', app_name='__APP__', event_id=0) | tojson }};
+const LOG_URL   = {{ url_for('logs.app_log', app_name='__APP__') | tojson }};
+const EVENT_URL = {{ url_for('logs.event_detail', app_name='__APP__', event_id=0) | tojson }};
 
-  function appLogUrl(appName) {
-    return LOG_URL.replace('__APP__', encodeURIComponent(appName));
-  }
-  function eventUrl(appName, eventId) {
-    return EVENT_URL
-      .replace('__APP__', encodeURIComponent(appName))
-      .replace('0', eventId);
-  }
+function appLogUrl(appName) {
+  return LOG_URL.replace('__APP__', encodeURIComponent(appName));
+}
+function eventUrl(appName, eventId) {
+  return EVENT_URL
+    .replace('__APP__', encodeURIComponent(appName))
+    .replace('0', eventId);
+}
 
-  // ---------------------------------------------------------------- stats + bars
-  function refreshStats() {
-    fetch('/api/stats')
-      .then(r => r.json())
-      .then(data => {
-        const entries = Object.entries(data);
-        const total = entries.reduce((a, [, v]) => a + v, 0);
-        document.getElementById('stat-errors').textContent = total;
-        document.getElementById('stat-apps').textContent  = entries.length;
+// ---------------------------------------------------------------- stats + bars
+function refreshStats() {
+  fetch('/api/stats')
+    .then(r => r.json())
+    .then(data => {
+      const entries = Object.entries(data);
+      const total = entries.reduce((a, [, v]) => a + v, 0);
+      document.getElementById('stat-errors').textContent = total;
+      document.getElementById('stat-apps').textContent   = entries.length;
 
-        const barsEl = document.getElementById('app-error-bars');
-        if (!entries.length) {
-          barsEl.innerHTML = '<div class="text-muted" style="font-size:12px;">No errors recorded in the last 24 hours.</div>';
-          return;
-        }
-        const maxCount = Math.max(...entries.map(([, v]) => v));
-        barsEl.innerHTML = entries.map(([appName, count]) => `
-          <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
-            <div style="width:130px;color:var(--text-muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${appName}</div>
-            <div style="flex:1;background:var(--bg3);border-radius:2px;height:8px;overflow:hidden;">
-              <div style="height:100%;background:var(--red);opacity:0.7;width:${Math.round(count/maxCount*100)}%;border-radius:2px;"></div>
-            </div>
-            <div style="width:40px;text-align:right;color:var(--red);font-size:12px;">${count}</div>
-            <a href="${appLogUrl(appName)}" style="font-size:11px;">view</a>
-          </div>`).join('');
-      });
-  }
+      const barsEl = document.getElementById('app-error-bars');
+      if (!entries.length) {
+        barsEl.innerHTML = '<div class="text-muted" style="font-size:12px;">No errors recorded in the last 24 hours.</div>';
+        return;
+      }
+      const maxCount = Math.max(...entries.map(([, v]) => v));
+      barsEl.innerHTML = entries.map(([appName, count]) => `
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+          <div style="width:130px;color:var(--text-muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${appName}</div>
+          <div style="flex:1;background:var(--bg3);border-radius:2px;height:8px;overflow:hidden;">
+            <div style="height:100%;background:var(--red);opacity:0.7;width:${Math.round(count/maxCount*100)}%;border-radius:2px;"></div>
+          </div>
+          <div style="width:40px;text-align:right;color:var(--red);font-size:12px;">${count}</div>
+          <a href="${appLogUrl(appName)}" style="font-size:11px;">view</a>
+        </div>`).join('');
+    });
+}
 
-  // ---------------------------------------------------------------- recent errors
-  function refreshErrors() {
-    fetch('/api/recent_errors?n=20')
-      .then(r => r.json())
-      .then(events => {
-        const tbody = document.getElementById('recent-errors-body');
-        if (!events.length) {
-          tbody.innerHTML = '<tr><td colspan="3" class="text-muted">No errors recorded yet.</td></tr>';
-          return;
-        }
-        tbody.innerHTML = events.map(e => {
-          const ts   = e.occurred_at ? e.occurred_at.replace('T',' ').slice(0,19) : '–';
-          const label = e.exception_type || e.message || '–';
-          const truncated = label.length > 60 ? label.slice(0,60) + '…' : label;
-          return `<tr>
-            <td><a href="${appLogUrl(e.app_name)}">${e.app_name}</a></td>
-            <td class="text-muted" style="white-space:nowrap;">${ts}</td>
-            <td><a href="${eventUrl(e.app_name, e.id)}" class="truncate" style="display:block;max-width:260px;" title="${label}">${truncated}</a></td>
-          </tr>`;
-        }).join('');
-      });
-  }
+// ---------------------------------------------------------------- recent errors
+function refreshErrors() {
+  fetch('/api/recent_errors?n=20')
+    .then(r => r.json())
+    .then(events => {
+      const tbody = document.getElementById('recent-errors-body');
+      if (!events.length) {
+        tbody.innerHTML = '<tr><td colspan="3" class="text-muted">No errors recorded yet.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = events.map(e => {
+        const ts      = e.occurred_at ? e.occurred_at.replace('T',' ').slice(0,19) : '–';
+        const label   = e.exception_type || e.message || '–';
+        const truncated = label.length > 60 ? label.slice(0,60) + '…' : label;
+        return `<tr>
+          <td><a href="${appLogUrl(e.app_name)}">${e.app_name}</a></td>
+          <td class="text-muted" style="white-space:nowrap;">${ts}</td>
+          <td><a href="${eventUrl(e.app_name, e.id)}" class="truncate" style="display:block;max-width:260px;" title="${label}">${truncated}</a></td>
+        </tr>`;
+      }).join('');
+    });
+}
 
-  // ---------------------------------------------------------------- recent SNS
-  function refreshSns() {
-    fetch('/api/sns/recent?n=10')
-      .then(r => r.json())
-      .then(items => {
-        const tbody = document.getElementById('recent-sns-body');
-        document.getElementById('stat-sns').textContent = items.length;
-        if (!items.length) {
-          tbody.innerHTML = '<tr><td colspan="3" class="text-muted">No SNS notifications yet.</td></tr>';
-          return;
-        }
-        tbody.innerHTML = items.map(s => {
-          const ts = s.received_at ? s.received_at.replace('T',' ').slice(0,16) : '–';
-          return `<tr>
-            <td class="text-muted" style="white-space:nowrap;">${ts}</td>
-            <td><span class="badge badge-grey">${s.notification_type || ''}</span></td>
-            <td class="truncate">${s.subject || '–'}</td>
-          </tr>`;
-        }).join('');
-      });
-  }
+// ---------------------------------------------------------------- recent SNS
+function refreshSns() {
+  fetch('/api/sns/recent?n=10')
+    .then(r => r.json())
+    .then(items => {
+      const tbody = document.getElementById('recent-sns-body');
+      document.getElementById('stat-sns').textContent = items.length;
+      if (!items.length) {
+        tbody.innerHTML = '<tr><td colspan="3" class="text-muted">No SNS notifications yet.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = items.map(s => {
+        const ts = s.received_at ? s.received_at.replace('T',' ').slice(0,16) : '–';
+        return `<tr>
+          <td class="text-muted" style="white-space:nowrap;">${ts}</td>
+          <td><span class="badge badge-grey">${s.notification_type || ''}</span></td>
+          <td class="truncate">${s.subject || '–'}</td>
+        </tr>`;
+      }).join('');
+    });
+}
 
-  // ---------------------------------------------------------------- boot + interval
-  function refreshAll() {
-    refreshStats();
-    refreshErrors();
-    refreshSns();
-  }
+// ---------------------------------------------------------------- bad-actor tile
+function refreshBadActors() {
+  fetch('/api/access/bad_actors/summary')
+    .then(r => r.json())
+    .then(data => {
+      const actors = data.actors || [];
+      if (!actors.length) return;   // tile stays hidden
 
-  refreshAll();
-  setInterval(refreshAll, 30000);
+      document.getElementById('bad-actor-alert').style.display = '';
+      const threshold = data.threshold;
+      const hours     = data.hours;
+
+      const rows = actors.slice(0, 5).map(a =>
+        `<div style="display:flex;gap:16px;align-items:center;margin-bottom:4px;font-size:12px;">
+           <span style="font-family:monospace;min-width:120px;">${a.ip}</span>
+           <span class="badge badge-grey">${a.country}</span>
+           <span style="color:var(--red);">${a.count.toLocaleString()} req</span>
+         </div>`
+      ).join('');
+
+      const more = actors.length > 5
+        ? `<div class="text-muted" style="font-size:11px;margin-top:6px;">…and ${actors.length - 5} more above ${threshold.toLocaleString()} requests in ${hours}h</div>`
+        : '';
+
+      document.getElementById('bad-actor-body').innerHTML = rows + more;
+    })
+    .catch(() => {});   // silently skip if access blueprint not yet wired
+}
+
+// ---------------------------------------------------------------- boot + interval
+function refreshAll() {
+  refreshStats();
+  refreshErrors();
+  refreshSns();
+  refreshBadActors();
+}
+
+refreshAll();
+setInterval(refreshAll, 30000);
 </script>
 {% endblock %}

@@ -1,0 +1,259 @@
+{% extends "base.jinja2" %}
+
+{% block title %}Bad Actors – LogMon{% endblock %}
+{% block page_title %}Bad Actors{% endblock %}
+
+{% block content %}
+
+<!-- Controls row -->
+<div class="card gap">
+  <div class="card-body" style="padding:14px 18px;display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;">
+
+    <div>
+      <label class="form-label" style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:3px;">From</label>
+      <input type="datetime-local" id="ctrl-start" class="form-control" style="font-size:12px;">
+    </div>
+    <div>
+      <label class="form-label" style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:3px;">To</label>
+      <input type="datetime-local" id="ctrl-end" class="form-control" style="font-size:12px;">
+    </div>
+    <div>
+      <label class="form-label" style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:3px;">Min requests</label>
+      <input type="number" id="ctrl-threshold" class="form-control" value="50" min="1" style="width:90px;font-size:12px;">
+    </div>
+
+    <!-- Quick-range shortcuts -->
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-self:flex-end;">
+      <button class="btn btn-ghost quick-range" data-hours="1">1 h</button>
+      <button class="btn btn-ghost quick-range" data-hours="6">6 h</button>
+      <button class="btn btn-ghost quick-range" data-hours="24">24 h</button>
+      <button class="btn btn-ghost quick-range" data-hours="72">3 d</button>
+      <button class="btn btn-ghost quick-range" data-hours="168">7 d</button>
+    </div>
+
+    <button class="btn btn-primary" id="btn-refresh" style="align-self:flex-end;">Analyse</button>
+  </div>
+</div>
+
+<!-- Summary row -->
+<div class="grid-3 gap" id="summary-tiles" style="display:none;">
+  <div class="stat-tile red">
+    <div class="stat-label">IPs above threshold</div>
+    <div class="stat-value" id="sum-actors">–</div>
+  </div>
+  <div class="stat-tile yellow">
+    <div class="stat-label">Total flagged requests</div>
+    <div class="stat-value" id="sum-requests">–</div>
+  </div>
+  <div class="stat-tile">
+    <div class="stat-label">Top country</div>
+    <div class="stat-value" id="sum-country" style="font-size:18px;">–</div>
+  </div>
+</div>
+
+<!-- iptables block export -->
+<div class="card gap" id="iptables-card" style="display:none;">
+  <div class="card-header">
+    Generated <code>iptables</code> block
+    <button class="btn btn-ghost" id="btn-copy-ipt" style="padding:3px 10px;font-size:11px;">Copy</button>
+    <span id="copy-confirm" style="font-size:11px;color:var(--green);display:none;margin-left:8px;">Copied ✓</span>
+  </div>
+  <div class="card-body" style="padding:10px 18px;">
+    <pre id="iptables-block" style="font-size:11px;margin:0;white-space:pre-wrap;word-break:break-all;color:var(--text-muted);background:var(--bg2);padding:10px;border-radius:4px;"></pre>
+  </div>
+</div>
+
+<!-- Results table -->
+<div class="card gap">
+  <div class="card-header">
+    Results
+    <span id="result-count" class="text-muted" style="font-size:11px;margin-left:8px;"></span>
+  </div>
+  <table class="data-table" id="actors-table">
+    <thead>
+      <tr>
+        <th></th>
+        <th style="cursor:pointer;" data-sort="ip">IP <span class="sort-arrow"></span></th>
+        <th style="cursor:pointer;" data-sort="country">Country <span class="sort-arrow"></span></th>
+        <th style="cursor:pointer;" data-sort="count">Requests ↓ <span class="sort-arrow"></span></th>
+        <th style="cursor:pointer;" data-sort="error_count">4xx/5xx <span class="sort-arrow"></span></th>
+        <th>Top paths</th>
+      </tr>
+    </thead>
+    <tbody id="actors-body">
+      <tr><td colspan="6" class="text-muted">Set a time window and click Analyse.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ---------------------------------------------------------------- state
+let _actors = [];
+let _sortCol = 'count';
+let _sortDir = -1;   // -1 = desc, 1 = asc
+let _selected = new Set();
+
+// ---------------------------------------------------------------- init date pickers
+(function () {
+  const fmt = dt => dt.toISOString().slice(0, 16);
+  const now = new Date();
+  const ago24 = new Date(now - 86400e3);
+  document.getElementById('ctrl-end').value   = fmt(now);
+  document.getElementById('ctrl-start').value = fmt(ago24);
+})();
+
+document.querySelectorAll('.quick-range').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const h = parseInt(btn.dataset.hours, 10);
+    const fmt = dt => dt.toISOString().slice(0, 16);
+    const now = new Date();
+    document.getElementById('ctrl-end').value   = fmt(now);
+    document.getElementById('ctrl-start').value = fmt(new Date(now - h * 3600e3));
+  });
+});
+
+// ---------------------------------------------------------------- fetch + render
+document.getElementById('btn-refresh').addEventListener('click', fetchActors);
+
+function fetchActors() {
+  const start     = document.getElementById('ctrl-start').value;
+  const end       = document.getElementById('ctrl-end').value;
+  const threshold = document.getElementById('ctrl-threshold').value;
+  const tbody     = document.getElementById('actors-body');
+
+  tbody.innerHTML = '<tr><td colspan="6" class="text-muted">Loading…</td></tr>';
+  document.getElementById('summary-tiles').style.display = 'none';
+  document.getElementById('iptables-card').style.display = 'none';
+  _selected.clear();
+
+  const url = `/api/access/bad_actors?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&threshold=${threshold}&limit=200`;
+  fetch(url)
+    .then(r => r.json())
+    .then(data => {
+      _actors = data.actors || [];
+      _sortCol = 'count';
+      _sortDir = -1;
+      renderTable();
+      renderSummary();
+      renderIptables();
+    })
+    .catch(err => {
+      tbody.innerHTML = `<tr><td colspan="6" class="text-muted">Error: ${err}</td></tr>`;
+    });
+}
+
+// ---------------------------------------------------------------- table render
+function renderTable() {
+  const sorted = [..._actors].sort((a, b) => {
+    const av = a[_sortCol] ?? '';
+    const bv = b[_sortCol] ?? '';
+    if (av < bv) return -_sortDir;
+    if (av > bv) return  _sortDir;
+    return 0;
+  });
+
+  const tbody = document.getElementById('actors-body');
+  document.getElementById('result-count').textContent = `${sorted.length} IPs`;
+
+  if (!sorted.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="text-muted">No IPs meet the threshold for this window.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = sorted.map(a => {
+    const chk = _selected.has(a.ip) ? 'checked' : '';
+    const paths = (a.paths || []).map(p =>
+      `<code style="font-size:10px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:300px;">${p}</code>`
+    ).join('');
+    const errPct = a.count ? Math.round(a.error_count / a.count * 100) : 0;
+    const errColor = errPct > 50 ? 'var(--red)' : errPct > 20 ? 'var(--yellow)' : '';
+    return `<tr>
+      <td><input type="checkbox" class="ip-select" data-ip="${a.ip}" ${chk}></td>
+      <td style="font-family:monospace;white-space:nowrap;">${a.ip}</td>
+      <td><span class="badge badge-grey">${a.country}</span></td>
+      <td style="text-align:right;">${a.count.toLocaleString()}</td>
+      <td style="text-align:right;color:${errColor};">${a.error_count.toLocaleString()} <span class="text-muted" style="font-size:10px;">(${errPct}%)</span></td>
+      <td>${paths}</td>
+    </tr>`;
+  }).join('');
+
+  // checkbox listeners
+  tbody.querySelectorAll('.ip-select').forEach(cb => {
+    cb.addEventListener('change', () => {
+      if (cb.checked) _selected.add(cb.dataset.ip);
+      else            _selected.delete(cb.dataset.ip);
+      renderIptables();
+    });
+  });
+
+  // sort arrow indicators
+  document.querySelectorAll('[data-sort]').forEach(th => {
+    const arrow = th.querySelector('.sort-arrow');
+    if (th.dataset.sort === _sortCol) {
+      arrow.textContent = _sortDir === -1 ? ' ↓' : ' ↑';
+    } else {
+      arrow.textContent = '';
+    }
+  });
+}
+
+// column sort click
+document.querySelectorAll('[data-sort]').forEach(th => {
+  th.addEventListener('click', () => {
+    if (_sortCol === th.dataset.sort) _sortDir *= -1;
+    else { _sortCol = th.dataset.sort; _sortDir = -1; }
+    renderTable();
+  });
+});
+
+// ---------------------------------------------------------------- summary tiles
+function renderSummary() {
+  if (!_actors.length) return;
+  document.getElementById('summary-tiles').style.display = '';
+
+  const totalReqs = _actors.reduce((s, a) => s + a.count, 0);
+  document.getElementById('sum-actors').textContent   = _actors.length.toLocaleString();
+  document.getElementById('sum-requests').textContent = totalReqs.toLocaleString();
+
+  // top country by count
+  const byCountry = {};
+  _actors.forEach(a => { byCountry[a.country] = (byCountry[a.country] || 0) + a.count; });
+  const top = Object.entries(byCountry).sort((a, b) => b[1] - a[1])[0];
+  document.getElementById('sum-country').textContent = top ? top[0] : '–';
+}
+
+// ---------------------------------------------------------------- iptables output
+function renderIptables() {
+  const ips = _selected.size ? [..._selected] : _actors.map(a => a.ip);
+  if (!ips.length) {
+    document.getElementById('iptables-card').style.display = 'none';
+    return;
+  }
+  document.getElementById('iptables-card').style.display = '';
+  const lines = [
+    '#!/bin/sh',
+    '# Generated by LogMon bad-actor analysis',
+    `# ${new Date().toISOString()}`,
+    '',
+    ...ips.map(ip => `iptables -I INPUT -s ${ip} -j DROP`),
+    '',
+    '# To make permanent (Debian/Ubuntu):',
+    '# iptables-save > /etc/iptables/rules.v4',
+  ];
+  document.getElementById('iptables-block').textContent = lines.join('\n');
+}
+
+// iptables copy button
+document.getElementById('btn-copy-ipt').addEventListener('click', () => {
+  const text = document.getElementById('iptables-block').textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const confirm = document.getElementById('copy-confirm');
+    confirm.style.display = 'inline';
+    setTimeout(() => { confirm.style.display = 'none'; }, 2000);
+  });
+});
+</script>
+{% endblock %}

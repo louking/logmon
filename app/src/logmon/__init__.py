@@ -76,6 +76,10 @@ def create_app(config_obj, configfiles=None, init_for_operation=True):
     from .model import db
     db.init_app(app)
 
+    # kick off the CIDR mapper warmup in the background so the first visit to /access isn't slow
+    from .access_analysis import warm_up_mapper
+    warm_up_mapper()
+
     # add loutilities tables-assets for js/css/template loading
     # see https://adambard.com/blog/fresh-flask-setup/
     #    and https://webassets.readthedocs.io/en/latest/environment.html#webassets.env.Environment.load_path
@@ -134,6 +138,7 @@ def create_app(config_obj, configfiles=None, init_for_operation=True):
     from .views.logs import bp as logs_bp
     from .views.sns import bp as sns_bp
     from .views.api import bp as api_bp
+    from .views.access import bp as access_bp
 
     app.register_blueprint(userrole)
     app.register_blueprint(frontend)
@@ -142,6 +147,7 @@ def create_app(config_obj, configfiles=None, init_for_operation=True):
     app.register_blueprint(logs_bp)
     app.register_blueprint(sns_bp)
     app.register_blueprint(api_bp)
+    app.register_blueprint(access_bp)
 
     # need to force app context else get
     #    RuntimeError: Working outside of application context.
