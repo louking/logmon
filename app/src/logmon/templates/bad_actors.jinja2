@@ -75,8 +75,8 @@
         <th></th>
         <th style="cursor:pointer;" data-sort="ip">IP <span class="sort-arrow"></span></th>
         <th style="cursor:pointer;" data-sort="country">Country <span class="sort-arrow"></span></th>
-        <th style="cursor:pointer;" data-sort="count">Requests ↓ <span class="sort-arrow"></span></th>
-        <th style="cursor:pointer;" data-sort="error_count">4xx/5xx <span class="sort-arrow"></span></th>
+        <th style="cursor:pointer;text-align:center;" data-sort="count">Requests ↓ <span class="sort-arrow"></span></th>
+        <th style="cursor:pointer;text-align:center;" data-sort="error_count">4xx/5xx <span class="sort-arrow"></span></th>
         <th>Top paths</th>
       </tr>
     </thead>
@@ -174,8 +174,8 @@ function renderTable() {
       <td><input type="checkbox" class="ip-select" data-ip="${a.ip}" ${chk}></td>
       <td style="font-family:monospace;white-space:nowrap;">${a.ip}</td>
       <td><span class="badge badge-grey">${a.country}</span></td>
-      <td style="text-align:right;">${a.count.toLocaleString()}</td>
-      <td style="text-align:right;color:${errColor};">${a.error_count.toLocaleString()} <span class="text-muted" style="font-size:10px;">(${errPct}%)</span></td>
+      <td style="text-align:center;">${a.count.toLocaleString()}</td>
+      <td style="text-align:center;color:${errColor};">${a.error_count.toLocaleString()} <span class="text-muted" style="font-size:10px;">(${errPct}%)</span></td>
       <td>${paths}</td>
     </tr>`;
   }).join('');
