@@ -126,7 +126,7 @@ def api_bad_actors():
     threshold = int(request.args.get("threshold", 0))
     limit     = int(request.args.get("limit", 100))
 
-    actors = get_bad_actors(start=start, end=end, threshold=threshold, limit=limit)
+    actors = get_bad_actors(start=start, end=end, flask_app=current_app._get_current_object(), threshold=threshold, limit=limit)
 
     return jsonify(
         {
@@ -158,7 +158,7 @@ def api_bad_actors_summary():
             current_app.config.get("BAD_ACTOR_WINDOW_HOURS", 24),
         )
     )
-    actors = get_bad_actors_summary(threshold=threshold, hours=hours)
+    actors = get_bad_actors_summary(threshold=threshold, hours=hours, flask_app=current_app._get_current_object())
     return jsonify(
         {
             "threshold": threshold,

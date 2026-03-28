@@ -156,13 +156,16 @@ class CountryCidrMapper:
 # Bad-actor analysis — queries the AccessEvent table
 # ---------------------------------------------------------------------------
 
-def _exclude_private_ips(col):
+def _exclude_private_ips(col, extra_ips: list | None = None):
     """Return a list of SQLAlchemy filter clauses that exclude RFC-1918,
-    loopback, and link-local addresses from the given string column.
+    loopback, link-local, and any caller-supplied IP addresses.
 
     Using LIKE on the string representation is DB-agnostic and avoids the need
     for a CIDR-aware DB extension.  The 172.16-31 range needs one clause per
     second-octet value because SQL LIKE cannot express numeric ranges.
+
+    extra_ips: exact IP strings to exclude in addition to private ranges
+               (e.g. the server's own public IP).
     """
     from sqlalchemy import not_
 
@@ -174,12 +177,36 @@ def _exclude_private_ips(col):
         # RFC-1918 class B: 172.16.0.0 – 172.31.255.255
         *(f"172.{n}." for n in range(16, 32)),
     ]
-    return [not_(col.like(f"{prefix}%")) for prefix in private_prefixes]
+    clauses = [not_(col.like(f"{prefix}%")) for prefix in private_prefixes]
+    for ip in (extra_ips or []):
+        ip = ip.strip()
+        if ip:
+            clauses.append(col != ip)
+    return clauses
+
+
+def _get_excluded_ips(flask_app) -> list:
+    """Return the list of extra IPs to exclude, read from app config.
+
+    Set ``EXCLUDED_IPS`` in your .cfg / environment as a comma-separated
+    string of IP addresses, e.g.::
+
+        EXCLUDED_IPS = 203.0.113.42, 203.0.113.43
+
+    Typical use: the server's own public IP address(es), which generate
+    internal health-check and monitoring traffic that should not be flagged
+    as bad actors.
+    """
+    raw = flask_app.config.get("EXCLUDED_IPS", "")
+    if not raw:
+        return []
+    return [ip.strip() for ip in raw.split(",") if ip.strip()]
 
 
 def get_bad_actors(
     start: datetime,
     end: datetime,
+    flask_app=None,
     threshold: int = 0,
     limit: int = 100,
 ) -> list[dict]:
@@ -207,6 +234,8 @@ def get_bad_actors(
     from sqlalchemy import func, not_
     from .model import db, AccessEvent  # relative import; works from views package too
 
+    excluded = _get_excluded_ips(flask_app) if flask_app else []
+
     # --- aggregate by IP, excluding RFC-1918 / loopback private ranges -------
     rows = (
         db.session.query(
@@ -219,7 +248,7 @@ def get_bad_actors(
         .filter(
             AccessEvent.occurred_at >= start,
             AccessEvent.occurred_at <= end,
-            *_exclude_private_ips(AccessEvent.client_ip),
+            *_exclude_private_ips(AccessEvent.client_ip, excluded),
         )
         .group_by(AccessEvent.client_ip)
         .order_by(func.count(AccessEvent.id).desc())
@@ -268,7 +297,7 @@ def get_bad_actors(
     return result
 
 
-def get_bad_actors_summary(threshold: int, hours: int = 24) -> list[dict]:
+def get_bad_actors_summary(threshold: int, hours: int = 24, flask_app=None) -> list[dict]:
     """Lightweight version used by the dashboard tile.
 
     Returns only IPs whose request count in the last `hours` hours
@@ -278,6 +307,8 @@ def get_bad_actors_summary(threshold: int, hours: int = 24) -> list[dict]:
     from datetime import timedelta
     from sqlalchemy import func
     from .model import db, AccessEvent
+
+    excluded = _get_excluded_ips(flask_app) if flask_app else []
 
     end = datetime.now(timezone.utc).replace(tzinfo=None)   # naive UTC, matches stored values
     start = end - timedelta(hours=hours)
@@ -290,7 +321,7 @@ def get_bad_actors_summary(threshold: int, hours: int = 24) -> list[dict]:
         .filter(
             AccessEvent.occurred_at >= start,
             AccessEvent.occurred_at <= end,
-            *_exclude_private_ips(AccessEvent.client_ip),
+            *_exclude_private_ips(AccessEvent.client_ip, excluded),
         )
         .group_by(AccessEvent.client_ip)
         .having(func.count(AccessEvent.id) >= threshold)
