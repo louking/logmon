@@ -11,8 +11,12 @@
       if (t) document.documentElement.setAttribute('data-theme', t);
     })();
   </script>
+  <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}">
+  {# font for branding, see branding.css #}
+  <link href="https://fonts.googleapis.com/css?family=Kanit:800&display=swap" rel="stylesheet">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Syne:wght@400;600;700;800&display=swap">
+  <link rel="stylesheet" type="text/css" href="/loutilities/static/branding.css">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
   {% block head %}{% endblock %}
   {% block head_extra %}{% endblock %}
@@ -21,8 +25,7 @@
 <div class="shell">
   <nav class="sidebar">
     <div class="sidebar-brand">
-      <span class="brand-icon">◈</span>
-      <span class="brand-text">LogMon</span>
+      <a href="/" style="text-decoration:none;color:inherit;">{{ _productname }}</a>
     </div>
 
     <div class="nav-section">
