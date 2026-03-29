@@ -175,9 +175,12 @@ class FileFollower(threading.Thread):
             if parsed is None:
                 continue
 
-            if parsed["type"] == "exception_start":
+            if parsed["type"] in ("exception_start", "traceback_start"):
+                # Both formats introduce a multi-line traceback — collect
+                # continuation lines before persisting.
                 pending = parsed
             elif parsed["level"] == "ERROR":
+                # Single-line ERROR with no traceback; persist immediately.
                 self._persist_app_event(parsed, "")
 
     # -------------------------------------------------------- access log loop

@@ -3,7 +3,7 @@ logparser.py — Parsers for two log formats produced by the Flask app stack.
 
 App log (*.log)
 ---------------
-Lines emitted by the Flask app's Python logging handler.  Two recognised
+Lines emitted by the Flask app's Python logging handler.  Three recognised
 shapes, plus a generic fallback:
 
   HTTP:
@@ -14,6 +14,12 @@ shapes, plus a generic fallback:
     Traceback (most recent call last):
       ...
     myapp.SomeError: message
+
+  Traceback start (ERROR line whose body begins with "Traceback"):
+    2026-03-29 15:26:58,058 ERROR: harriet@example.com Traceback (most recent call last):
+      File "…", line N, in …
+        …
+    smtplib.SMTPDataError: (554, b'…') [in …]
 
 Access log (access.log)
 -----------------------
@@ -67,6 +73,13 @@ RE_APP_EXCEPTION = re.compile(
     rf"^{_TS}\s+{_LEVEL}:\s+{_USER}\s+Exception on\s+(\S+)\s+\[(\w+)\]\s+\[in\s+([^\]]+)\]"
 )
 
+# Matches ERROR lines whose body starts with "Traceback (most recent call last):"
+# e.g.:
+#   2026-03-29 15:26:58,058 ERROR: harriet@example.com Traceback (most recent call last):
+RE_APP_TRACEBACK_START = re.compile(
+    rf"^{_TS}\s+{_LEVEL}:\s+{_USER}\s+(Traceback \(most recent call last\):.*)"
+)
+
 RE_APP_GENERIC = re.compile(rf"^{_TS}\s+{_LEVEL}:\s+(.*)")
 
 _APP_TS_FMT = "%Y-%m-%d %H:%M:%S,%f"
@@ -80,6 +93,13 @@ def parse_app_line(line: str) -> dict | None:
     """
     Parse one line from a Flask app log.
     Returns a structured dict or None if the line is unrecognised.
+
+    Possible ``type`` values:
+      - ``"http"``            — a completed HTTP request line
+      - ``"exception_start"`` — ``Exception on /path [METHOD]`` header
+      - ``"traceback_start"`` — ERROR line whose body begins with
+                                ``Traceback (most recent call last):``
+      - ``"generic"``         — any other timestamped log line
     """
     m = RE_APP_HTTP.match(line)
     if m:
@@ -111,6 +131,22 @@ def parse_app_line(line: str) -> dict | None:
             status_code=None,
             location=location,
             message=f"Exception on {path} [{method}]",
+        )
+
+    m = RE_APP_TRACEBACK_START.match(line)
+    if m:
+        ts, level, user, msg = m.groups()
+        return dict(
+            type="traceback_start",
+            occurred_at=_parse_app_ts(ts),
+            level=level,
+            user=user,
+            ip=None,
+            method=None,
+            url=None,
+            status_code=None,
+            location=None,
+            message=msg.strip(),
         )
 
     m = RE_APP_GENERIC.match(line)
