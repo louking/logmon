@@ -172,7 +172,13 @@ class Config(object):
     DISK_SNAPSHOT_HISTORY: int = int(os.environ.get("DISK_SNAPSHOT_HISTORY", 1440))
     # Minimum seconds between alerts for the same filesystem (default 4 h).
     DISK_ALERT_SUPPRESS_SECONDS: int = int(os.environ.get("DISK_ALERT_SUPPRESS_SECONDS", 14400))
-    
+    # exclude mounts from disk monitoring (comma-separated list, e.g., "/boot,/boot/efi")
+    DISK_EXCLUDE_MOUNTS:         list[str] = [
+        m.strip()
+        for m in os.environ.get("DISK_EXCLUDE_MOUNTS", "").split(",")
+        if m.strip()
+    ]
+ 
     # ------------------------------------------------------------ SNS
     SNS_TOPIC_ARNS_ALLOWED: list[str] = [
         t.strip() for t in os.environ.get("SNS_TOPIC_ARNS", "").split(",") if t.strip()

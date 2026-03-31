@@ -35,6 +35,9 @@ RUN apk add --no-cache mariadb-connector-c-dev \
 # we'll be doing mysql, mysqldump commands
 RUN apk add --no-cache mysql-client
 
+# need to run docker cli
+RUN apk add --no-cache docker-cli
+
 # use msmtp for sendmail, need volume with /etc/msmtprc defined
 RUN apk add --no-cache msmtp && rm /usr/sbin/sendmail && ln -s /usr/bin/msmtp /usr/sbin/sendmail
 

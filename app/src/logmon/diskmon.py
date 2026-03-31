@@ -26,16 +26,24 @@ Uses the same AlertSuppression model as follower.py, with:
 Disk alerts use DISK_ALERT_SUPPRESS_SECONDS (default 14400 = 4 h), falling
 back to ALERT_SUPPRESS_SECONDS if the disk-specific key is not set.
 
-Docker socket
--------------
-The container running this thread needs:
+Docker stats
+------------
+The follower container needs the Docker socket mounted:
+
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro   # Linux
-      # or on Windows Docker Desktop:
+      # Windows Docker Desktop:
       - //./pipe/docker_engine:/var/run/docker.sock
-Add that line to docker-compose.override.yml under the `follower` service.
-If the socket is absent, Docker stats are skipped gracefully and the
-snapshot's docker_* fields are null.
+
+Alternatively, set DOCKER_HOST=tcp://host.docker.internal:2375 in the
+follower environment (requires "Expose daemon on TCP" in Docker Desktop).
+
+If neither the socket nor DOCKER_HOST is available, Docker stats are
+skipped gracefully and the snapshot's docker field is null.
+
+The docker CLI binary must be present in the container.  Add to Dockerfile:
+    RUN apt-get update && apt-get install -y --no-install-recommends docker.io \
+        && rm -rf /var/lib/apt/lists/*
 
 Host filesystem visibility
 --------------------------
@@ -50,6 +58,11 @@ read-only mounts under a /host/ prefix in docker-compose.override.yml:
 
 diskmon detects the /host/ prefix, strips it for display (/host/root → /),
 and ignores everything else (overlay layers, snap mounts, tmpfs, etc.).
+
+To suppress specific mount points from the display and alerts, set:
+
+    environment:
+      DISK_EXCLUDE_MOUNTS: "/boot,/boot/efi"
 """
 from __future__ import annotations
 
@@ -81,7 +94,7 @@ def start_disk_monitor(flask_app) -> None:
 
 def get_disk_snapshot(flask_app) -> dict | None:
     """Return the most-recent snapshot dict, or None if not yet collected."""
-    from .follower import _get_redis  # reuse the shared Redis client helper
+    from .follower import _get_redis
     r = _get_redis(flask_app)
     raw = r.lindex(REDIS_KEY, 0)
     if raw is None:
@@ -117,7 +130,7 @@ class DiskMonitor(threading.Thread):
         interval = self.flask_app.config.get("DISK_CHECK_INTERVAL", 60)
         while True:
             try:
-                snapshot = _collect()
+                snapshot = _collect(self.flask_app)
                 self._store(snapshot)
                 self._store_db(snapshot)
                 self._check_alerts(snapshot)
@@ -148,7 +161,6 @@ class DiskMonitor(threading.Thread):
 
         rows = []
 
-        # --- one row per real filesystem ---
         for fs in snapshot.get("filesystems", []):
             rows.append(DiskSnapshot(
                 collected_at = collected_at,
@@ -160,7 +172,6 @@ class DiskMonitor(threading.Thread):
                 use_pct      = fs.get("use_pct"),
             ))
 
-        # --- one sentinel row for Docker totals ---
         d = snapshot.get("docker")
         if d is not None:
             rows.append(DiskSnapshot(
@@ -184,7 +195,7 @@ class DiskMonitor(threading.Thread):
         with self.flask_app.app_context():
             try:
                 for row in rows:
-                    db.session.merge(row)   # INSERT OR UPDATE on the unique constraint
+                    db.session.merge(row)
                 db.session.commit()
             except Exception:
                 db.session.rollback()
@@ -193,8 +204,7 @@ class DiskMonitor(threading.Thread):
     def _check_alerts(self, snapshot: dict) -> None:
         threshold = self.flask_app.config.get("DISK_ALERT_THRESHOLD_PCT", 85)
         for fs in snapshot.get("filesystems", []):
-            pct = fs.get("use_pct", 0)
-            if pct >= threshold:
+            if fs.get("use_pct", 0) >= threshold:
                 self._maybe_alert(fs, threshold)
 
     def _maybe_alert(self, fs: dict, threshold: int) -> None:
@@ -229,7 +239,8 @@ class DiskMonitor(threading.Thread):
 
 # ---------------------------------------------------------------- collection
 
-# Filesystem types to exclude (pseudo/kernel/container fs).
+# Filesystem types treated as pseudo/virtual — excluded in both host_mode
+# and fallback mode.
 _DF_EXCLUDE = frozenset([
     "tmpfs", "devtmpfs", "overlay", "shm", "squashfs",
     "udev", "cgroup", "cgroupfs", "cgroup2", "pstore",
@@ -238,7 +249,7 @@ _DF_EXCLUDE = frozenset([
 ])
 
 
-def _collect() -> dict:
+def _collect(flask_app=None) -> dict:
     """
     Return a snapshot dict with shape:
 
@@ -246,57 +257,50 @@ def _collect() -> dict:
         "collected_at": "2025-01-01T00:00:00",
         "filesystems": [
             {
-                "device":    "/dev/sda1",
-                "mount":     "/",
-                "total_kb":  102400,
-                "used_kb":   51200,
-                "avail_kb":  51200,
-                "use_pct":   50,          # integer 0-100
+                "device":   "/dev/sda1",
+                "mount":    "/",
+                "total_kb": 102400,
+                "used_kb":  51200,
+                "avail_kb": 51200,
+                "use_pct":  50,
             },
             ...
         ],
-        "docker": {                        # null if Docker socket unavailable
-            "images_active":            3,
-            "images_size_bytes":        1234567,
-            "images_reclaimable_bytes": 123456,
-            "containers_active":        2,
-            "containers_size_bytes":    0,
-            "volumes_count":            4,
-            "volumes_size_bytes":       9876,
-            "volumes_reclaimable_bytes":0,
-            "build_cache_count":        0,
-            "build_cache_size_bytes":   0,
-            "build_cache_reclaimable_bytes": 0,
-            "images":  [...],             # verbose detail list
-            "volumes": [...],
-        },
+        "docker": { ... } | null,
     }
     """
+    exclude_mounts = (
+        flask_app.config.get("DISK_EXCLUDE_MOUNTS", []) if flask_app else []
+    )
     return {
         "collected_at": datetime.now().isoformat(timespec="seconds"),
-        "filesystems":  _collect_df(),
+        "filesystems":  _collect_df(exclude_mounts),
         "docker":       _collect_docker(),
     }
 
 
-def _collect_df() -> list[dict]:
+def _collect_df(exclude_mounts: list[str] | None = None) -> list[dict]:
     """
     Run `df -Pk` and return one dict per real high-level filesystem.
 
-    In host_mode (a /host/ bind-mount prefix is present in the container):
-      - Only mounts under /host/ are considered; everything else is discarded.
-      - Loop devices (/dev/loop*) are skipped — these are snap/flatpak/squashfs
-        mounts that appear under /host/ but are not real storage volumes.
-      - squashfs and other pseudo fstypes are skipped via /proc/mounts lookup.
+    host_mode  (a /host/ bind-mount prefix is present in the container)
+    ---------
+    Only mounts under /host/ are considered; all else is discarded.
+    Additional filters applied in host_mode:
+      - Loop devices (/dev/loop*) — snap, flatpak, squashfs image layers.
+      - Any fstype in _DF_EXCLUDE (squashfs, tmpfs, overlay, …).
       - /host/root is normalised to display as /.
-      - The same physical device appearing at multiple /host/ paths (e.g. C:\
-        backing several bind mounts on Windows/WSL2) is deduplicated — only
-        the shortest display path is kept.
+      - Same physical device at multiple paths → shortest display path wins
+        (handles Windows/WSL2 where C:\\ backs every bind-mount).
 
-    Without host_mode (fallback, no /host/ prefix configured):
-      - Pseudo filesystem types and devices are filtered as before.
-      - Docker overlay2 paths are explicitly excluded.
+    fallback mode  (no /host/ prefix)
+    -------------
+    Pseudo device names and fstypes are filtered.
+    Docker overlay2 layer paths are explicitly excluded.
     """
+    if exclude_mounts is None:
+        exclude_mounts = []
+
     try:
         result = subprocess.run(
             ["df", "-P", "-k"],
@@ -307,10 +311,10 @@ def _collect_df() -> list[dict]:
         return []
 
     host_mode = os.path.isdir(HOST_PREFIX)
-    rows = []
-    seen_devices: dict[str, int] = {}   # device → index in rows, for dedup
+    rows: list[dict] = []
+    seen_devices: dict[str, int] = {}   # device → index in rows
 
-    for line in result.stdout.splitlines()[1:]:   # skip header
+    for line in result.stdout.splitlines()[1:]:
         parts = line.split()
         if len(parts) < 6:
             continue
@@ -319,38 +323,38 @@ def _collect_df() -> list[dict]:
         )
 
         if host_mode:
-            # Only process mounts under the /host/ prefix.
+            # ---- host_mode: only /host/* mounts ----
             if not mount.startswith(HOST_PREFIX + "/") and mount != HOST_PREFIX:
                 continue
 
-            # Skip loop devices — snap packages, flatpak runtimes, and some
-            # Docker components each get their own /dev/loopN even under /host/.
+            # Loop devices: snap packages, flatpak runtimes, Docker image layers.
             if device.startswith("/dev/loop"):
                 continue
 
-            # Skip pseudo fstypes (squashfs, tmpfs, overlay, …) by consulting
-            # /proc/mounts, which reflects the host's mount table when /host/
-            # is a bind-mount of /.
+            # Pseudo fstypes via /proc/mounts.
             fstype = _get_fstype(mount)
             if fstype and fstype.lower() in _DF_EXCLUDE:
                 continue
 
-            # Normalise display path: strip /host prefix, /host/root → /.
+            # Strip /host prefix; /host/root → /.
             display_mount = mount[len(HOST_PREFIX):]
             if display_mount in ("/root", ""):
                 display_mount = "/"
 
         else:
-            # Fallback: no /host/ convention.  Filter obvious noise.
+            # ---- fallback mode ----
             if device in ("tmpfs", "none", "devtmpfs", "overlay", "shm"):
                 continue
             fstype = _get_fstype(mount)
             if fstype and fstype.lower() in _DF_EXCLUDE:
                 continue
-            # Exclude Docker overlay2 layer paths and container rootfs paths.
             if "/overlay2/" in mount or "/containers/" in mount:
                 continue
             display_mount = mount
+
+        # User-configured exclusions (e.g. /boot, /boot/efi).
+        if display_mount in exclude_mounts:
+            continue
 
         try:
             use_pct = int(use_pct_str.rstrip("%"))
@@ -366,15 +370,11 @@ def _collect_df() -> list[dict]:
             "use_pct":  use_pct,
         }
 
-        # Deduplicate by device.  On Windows/WSL2 the same physical disk (e.g.
-        # C:\) backs multiple bind mounts (/logs/app1, /logs/app2, /config …).
-        # Keep only the entry with the shortest display_mount path, which is
-        # the top-level volume rather than one of the leaf bind mounts.
+        # Deduplicate by device — keep the entry with the shortest display path.
         if device in seen_devices:
-            existing_idx = seen_devices[device]
-            if len(display_mount) < len(rows[existing_idx]["mount"]):
-                rows[existing_idx] = row   # replace with the shorter path
-            # either way, don't append a second row for this device
+            idx = seen_devices[device]
+            if len(display_mount) < len(rows[idx]["mount"]):
+                rows[idx] = row
             continue
 
         seen_devices[device] = len(rows)
@@ -398,9 +398,13 @@ def _get_fstype(mount: str) -> str | None:
 
 def _collect_docker() -> dict | None:
     """
-    Run `docker system df --format json` for summary and
-    `docker system df -v` for verbose detail.
-    Returns None gracefully if Docker is unavailable or the socket is absent.
+    Run `docker system df` for summary and verbose detail.
+    Returns None gracefully if Docker is unavailable.
+
+    Requires either:
+      - /var/run/docker.sock mounted into the container, or
+      - DOCKER_HOST set (e.g. tcp://host.docker.internal:2375)
+    Also requires the `docker` CLI binary to be installed in the container.
     """
     docker_host = os.environ.get("DOCKER_HOST", "")
     socket_present = os.path.exists("/var/run/docker.sock")
@@ -440,7 +444,6 @@ def _run_docker_df() -> dict | None:
         if result.returncode != 0:
             log.warning("docker system df failed: %s", result.stderr[:200])
             return None
-        # Output is one JSON object per line (Images, Containers, Volumes, BuildCache)
         data: dict = {}
         for line in result.stdout.splitlines():
             line = line.strip()
@@ -448,8 +451,7 @@ def _run_docker_df() -> dict | None:
                 continue
             try:
                 obj = json.loads(line)
-                t = obj.get("Type", "")
-                data[t] = obj
+                data[obj.get("Type", "")] = obj
             except json.JSONDecodeError:
                 pass
         return data
@@ -479,35 +481,30 @@ def _parse_docker_df_verbose(text: str) -> dict:
     """
     images: list[dict] = []
     volumes: list[dict] = []
-
     section = None
+
     for line in text.splitlines():
-        line_stripped = line.strip()
-        if line_stripped.startswith("Images space usage"):
-            section = "images"
-            continue
-        if line_stripped.startswith("Containers space usage"):
-            section = "containers"
-            continue
-        if line_stripped.startswith("Local Volumes space usage"):
-            section = "volumes"
-            continue
-        if line_stripped.startswith("Build cache usage"):
-            section = "build_cache"
-            continue
-        if (not line_stripped
-                or line_stripped.startswith("REPOSITORY")
-                or line_stripped.startswith("CONTAINER")
-                or line_stripped.startswith("VOLUME")
-                or line_stripped.startswith("CACHE")):
+        s = line.strip()
+        if s.startswith("Images space usage"):
+            section = "images"; continue
+        if s.startswith("Containers space usage"):
+            section = "containers"; continue
+        if s.startswith("Local Volumes space usage"):
+            section = "volumes"; continue
+        if s.startswith("Build cache usage"):
+            section = "build_cache"; continue
+        if (not s
+                or s.startswith("REPOSITORY")
+                or s.startswith("CONTAINER")
+                or s.startswith("VOLUME")
+                or s.startswith("CACHE")):
             continue
 
-        parts = line_stripped.split()
+        parts = s.split()
         if not parts:
             continue
 
         if section == "images" and len(parts) >= 7:
-            # REPOSITORY  TAG  IMAGE ID  CREATED  SIZE  SHARED SIZE  UNIQUE SIZE  CONTAINERS
             images.append({
                 "repository":  parts[0],
                 "tag":         parts[1],
@@ -517,7 +514,6 @@ def _parse_docker_df_verbose(text: str) -> dict:
                 "unique_size": parts[6] if len(parts) > 6 else "",
             })
         elif section == "volumes" and len(parts) >= 3:
-            # VOLUME NAME  LINKS  SIZE
             volumes.append({
                 "name":  parts[0],
                 "links": parts[1],
@@ -535,7 +531,8 @@ def _parse_size(s: str) -> int:
     """
     if not s:
         return 0
-    s = s.strip().split("(")[0].strip()   # strip "200MB (50%)" annotation
+    s = s.strip().split("(")[0].strip()
+    # Longest suffix first to avoid "kb" matching before "kib".
     multipliers = {
         "tib": 1_099_511_627_776,
         "gib": 1_073_741_824,
@@ -548,7 +545,7 @@ def _parse_size(s: str) -> int:
         "b":   1,
     }
     lower = s.lower()
-    for suffix, mult in multipliers.items():   # already longest-first
+    for suffix, mult in multipliers.items():
         if lower.endswith(suffix):
             try:
                 return int(float(lower[: -len(suffix)].strip()) * mult)
