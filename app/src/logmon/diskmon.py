@@ -41,9 +41,8 @@ follower environment (requires "Expose daemon on TCP" in Docker Desktop).
 If neither the socket nor DOCKER_HOST is available, Docker stats are
 skipped gracefully and the snapshot's docker field is null.
 
-The docker CLI binary must be present in the container.  Add to Dockerfile:
-    RUN apt-get update && apt-get install -y --no-install-recommends docker.io \
-        && rm -rf /var/lib/apt/lists/*
+The docker CLI binary must be present in the container.  For Alpine:
+    RUN apk add --no-cache docker-cli
 
 Host filesystem visibility
 --------------------------
@@ -289,7 +288,9 @@ def _collect_df(exclude_mounts: list[str] | None = None) -> list[dict]:
     Additional filters applied in host_mode:
       - Loop devices (/dev/loop*) — snap, flatpak, squashfs image layers.
       - Any fstype in _DF_EXCLUDE (squashfs, tmpfs, overlay, …).
-      - /host/root is normalised to display as /.
+      - /host/root is normalised to display as /; sub-mounts such as
+        /host/root/boot are normalised to /boot (the /root segment is
+        always stripped, not just the top-level /host/root case).
       - Same physical device at multiple paths → shortest display path wins
         (handles Windows/WSL2 where C:\\ backs every bind-mount).
 
@@ -336,10 +337,17 @@ def _collect_df(exclude_mounts: list[str] | None = None) -> list[dict]:
             if fstype and fstype.lower() in _DF_EXCLUDE:
                 continue
 
-            # Strip /host prefix; /host/root → /.
-            display_mount = mount[len(HOST_PREFIX):]
-            if display_mount in ("/root", ""):
+            # Strip /host prefix, then strip the /root segment that results
+            # from bind-mounting / to /host/root.
+            #   /host/root        → /
+            #   /host/root/boot   → /boot
+            #   /host/root/boot/efi → /boot/efi
+            #   /host/mnt/data    → /mnt/data  (explicit extra mount, no /root)
+            display_mount = mount[len(HOST_PREFIX):]   # e.g. /root, /root/boot, /mnt/data
+            if display_mount == "" or display_mount == "/root":
                 display_mount = "/"
+            elif display_mount.startswith("/root/"):
+                display_mount = display_mount[len("/root"):]   # /root/boot → /boot
 
         else:
             # ---- fallback mode ----
@@ -416,6 +424,9 @@ def _collect_docker() -> dict | None:
         return None
     verbose = _run_docker_df_verbose()
 
+    # Note: docker system df --format "{{json .}}" uses the Type field value
+    # verbatim, so keys are "Images", "Containers", "Local Volumes", "Build Cache"
+    # (with spaces for the latter two).
     return {
         "images_size":               summary.get("Images", {}).get("TotalCount", 0),
         "images_active":             summary.get("Images", {}).get("Active", 0),
@@ -423,12 +434,12 @@ def _collect_docker() -> dict | None:
         "images_reclaimable_bytes":  _parse_size(summary.get("Images", {}).get("Reclaimable", "0B")),
         "containers_active":         summary.get("Containers", {}).get("Active", 0),
         "containers_size_bytes":     _parse_size(summary.get("Containers", {}).get("Size", "0B")),
-        "volumes_count":             summary.get("Volumes", {}).get("TotalCount", 0),
-        "volumes_size_bytes":        _parse_size(summary.get("Volumes", {}).get("Size", "0B")),
-        "volumes_reclaimable_bytes": _parse_size(summary.get("Volumes", {}).get("Reclaimable", "0B")),
-        "build_cache_count":         summary.get("BuildCache", {}).get("TotalCount", 0),
-        "build_cache_size_bytes":    _parse_size(summary.get("BuildCache", {}).get("Size", "0B")),
-        "build_cache_reclaimable_bytes": _parse_size(summary.get("BuildCache", {}).get("Reclaimable", "0B")),
+        "volumes_count":             summary.get("Local Volumes", {}).get("TotalCount", 0),
+        "volumes_size_bytes":        _parse_size(summary.get("Local Volumes", {}).get("Size", "0B")),
+        "volumes_reclaimable_bytes": _parse_size(summary.get("Local Volumes", {}).get("Reclaimable", "0B")),
+        "build_cache_count":         summary.get("Build Cache", {}).get("TotalCount", 0),
+        "build_cache_size_bytes":    _parse_size(summary.get("Build Cache", {}).get("Size", "0B")),
+        "build_cache_reclaimable_bytes": _parse_size(summary.get("Build Cache", {}).get("Reclaimable", "0B")),
         "images":  verbose.get("images",  []) if verbose else [],
         "volumes": verbose.get("volumes", []) if verbose else [],
     }
@@ -505,13 +516,17 @@ def _parse_docker_df_verbose(text: str) -> dict:
             continue
 
         if section == "images" and len(parts) >= 7:
+            # Columns: REPOSITORY TAG IMAGE-ID ...CREATED(variable words)... SIZE SHARED-SIZE UNIQUE-SIZE CONTAINERS
+            # CREATED is variable width ("3 minutes ago", "2 weeks ago", etc.)
+            # so parse fixed columns from the right instead of by index.
             images.append({
                 "repository":  parts[0],
                 "tag":         parts[1],
                 "image_id":    parts[2],
-                "size":        parts[4],
-                "shared_size": parts[5] if len(parts) > 5 else "",
-                "unique_size": parts[6] if len(parts) > 6 else "",
+                "size":        parts[-4],
+                "shared_size": parts[-3],
+                "unique_size": parts[-2],
+                # parts[-1] is CONTAINERS count
             })
         elif section == "volumes" and len(parts) >= 3:
             volumes.append({
