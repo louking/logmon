@@ -95,7 +95,7 @@ Edit both files:
 * `DO_HOST_ID` — integer droplet ID shown in the DigitalOcean control panel (required for CPU utilization charts)
 * `BAD_ACTOR_THRESHOLD` — minimum requests in the window before an IP appears in the dashboard alert tile (default: `200`)
 * `BAD_ACTOR_WINDOW_HOURS` — how many hours back the dashboard tile looks (default: `24`)
-* `EXCLUDED_IPS` — comma-separated list of IP addresses to exclude from bad-actor analysis entirely (e.g. the server's own public IP, which generates health-check traffic that should not be flagged)
+* `EXCLUDED_IPS` — comma-separated list of IP addresses or CIDR networks to exclude from bad-actor analysis entirely (e.g. the server's own public IP or a CDN/monitoring network). Both single IPs (`203.0.113.42`) and networks (`198.51.100.0/24`) are accepted.
 * `volumes:` under `follower:` — one bind mount per monitored app:
 
   ```
@@ -294,9 +294,9 @@ in the results.
 
 ```yaml
 environment:
-  BAD_ACTOR_THRESHOLD: 200      # requests in window before flagging
-  BAD_ACTOR_WINDOW_HOURS: 24    # look-back window for dashboard tile
-  EXCLUDED_IPS: 203.0.113.42   # server's own public IP (comma-separated for multiple)
+  BAD_ACTOR_THRESHOLD: 200            # requests in window before flagging
+  BAD_ACTOR_WINDOW_HOURS: 24          # look-back window for dashboard tile
+  EXCLUDED_IPS: 203.0.113.42, 198.51.100.0/24   # IPs or CIDR networks to exclude
 ```
 
 ### Using the page

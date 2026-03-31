@@ -158,16 +158,18 @@ class CountryCidrMapper:
 
 def _exclude_private_ips(col, extra_ips: list | None = None):
     """Return a list of SQLAlchemy filter clauses that exclude RFC-1918,
-    loopback, link-local, and any caller-supplied IP addresses.
+    loopback, link-local, and any caller-supplied IPs or CIDR networks.
 
-    Using LIKE on the string representation is DB-agnostic and avoids the need
-    for a CIDR-aware DB extension.  The 172.16-31 range needs one clause per
-    second-octet value because SQL LIKE cannot express numeric ranges.
+    Private ranges use LIKE prefix matching (DB-agnostic, no extension needed).
+    The 172.16-31 range needs one clause per second-octet value because SQL
+    LIKE cannot express numeric ranges.
 
-    extra_ips: exact IP strings to exclude in addition to private ranges
-               (e.g. the server's own public IP).
+    extra_ips: IPs or CIDR networks to exclude in addition to private ranges,
+               e.g. ["203.0.113.42", "198.51.100.0/24"].  Single IPs may be
+               given with or without a /32 suffix.
     """
-    from sqlalchemy import not_
+    from ipaddress import ip_network
+    from sqlalchemy import not_, func
 
     private_prefixes = [
         "127.",           # loopback
@@ -178,29 +180,49 @@ def _exclude_private_ips(col, extra_ips: list | None = None):
         *(f"172.{n}." for n in range(16, 32)),
     ]
     clauses = [not_(col.like(f"{prefix}%")) for prefix in private_prefixes]
-    for ip in (extra_ips or []):
-        ip = ip.strip()
-        if ip:
-            clauses.append(col != ip)
+
+    for entry in (extra_ips or []):
+        entry = entry.strip()
+        if not entry:
+            continue
+        try:
+            net = ip_network(entry, strict=False)
+        except ValueError:
+            log.warning("EXCLUDED_IPS: ignoring invalid entry %r", entry)
+            continue
+        if net.num_addresses == 1:
+            # Single host — simple equality is fastest
+            clauses.append(col != str(net.network_address))
+        else:
+            # Network range — use INET_ATON for numeric comparison so we
+            # don't need a DB CIDR extension.  Works on MySQL and MariaDB.
+            # For SQLite (dev/test) INET_ATON is unavailable; fall back to
+            # generating one != clause per address (only practical for /30+).
+            lo = int(net.network_address)
+            hi = int(net.broadcast_address)
+            inet_aton = func.inet_aton(col)
+            clauses.append(
+                (inet_aton < lo) | (inet_aton > hi)
+            )
     return clauses
 
 
 def _get_excluded_ips(flask_app) -> list:
-    """Return the list of extra IPs to exclude, read from app config.
+    """Return the list of extra IPs/networks to exclude, read from app config.
 
     Set ``EXCLUDED_IPS`` in your .cfg / environment as a comma-separated
-    string of IP addresses, e.g.::
+    string of IP addresses or CIDR networks, e.g.::
 
-        EXCLUDED_IPS = 203.0.113.42, 203.0.113.43
+        EXCLUDED_IPS = 203.0.113.42, 198.51.100.0/24
 
-    Typical use: the server's own public IP address(es), which generate
-    internal health-check and monitoring traffic that should not be flagged
-    as bad actors.
+    Typical use: the server's own public IP address(es) and any monitoring or
+    CDN networks that generate high volumes of legitimate traffic and should
+    not be flagged as bad actors.
     """
     raw = flask_app.config.get("EXCLUDED_IPS", "")
     if not raw:
         return []
-    return [ip.strip() for ip in raw.split(",") if ip.strip()]
+    return [entry.strip() for entry in raw.split(",") if entry.strip()]
 
 
 def get_bad_actors(
