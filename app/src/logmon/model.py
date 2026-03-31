@@ -145,3 +145,85 @@ class AccessEvent(Base):
             "referer": self.referer,
             "user_agent": self.user_agent,
         }
+
+class DiskSnapshot(Base):
+    """
+    One persisted disk-usage sample per filesystem (or Docker sentinel) per
+    collection run.
+
+    Real filesystem rows
+    --------------------
+    mount, device, total_kb, used_kb, avail_kb, use_pct are populated.
+    docker_* columns are NULL.
+
+    Docker sentinel row  (mount == "__docker__")
+    --------------------------------------------
+    device / total_kb / used_kb / avail_kb / use_pct are NULL.
+    docker_* columns are populated with the aggregated Docker totals.
+    images / volumes detail is intentionally NOT stored here — it is
+    verbose and already available on demand via `docker system df -v`.
+
+    Retention
+    ---------
+    Rows accumulate over time.  Add a periodic purge if needed — e.g. keep only
+    the last 90 days.  A future flask CLI command `flask disk-purge --days 90`
+    could do this.  For now, operators can run:
+
+        DELETE FROM disk_snapshot WHERE collected_at < NOW() - INTERVAL 90 DAY;
+
+    """
+    __tablename__ = "disk_snapshot"
+
+    id           = db.Column(db.Integer, primary_key=True)
+    collected_at = db.Column(db.DateTime, nullable=False, index=True,
+                             default=datetime.now)
+
+    # ---- real filesystem columns (NULL on __docker__ sentinel row) ----
+    mount    = db.Column(db.String(512), nullable=False, index=True)
+    device   = db.Column(db.String(256))
+    total_kb = db.Column(db.BigInteger)
+    used_kb  = db.Column(db.BigInteger)
+    avail_kb = db.Column(db.BigInteger)
+    use_pct  = db.Column(db.Integer)          # 0-100
+
+    # ---- Docker sentinel columns (NULL on real filesystem rows) ----
+    docker_images_size_bytes              = db.Column(db.BigInteger)
+    docker_images_reclaimable_bytes       = db.Column(db.BigInteger)
+    docker_images_active                  = db.Column(db.Integer)
+    docker_containers_size_bytes          = db.Column(db.BigInteger)
+    docker_containers_active              = db.Column(db.Integer)
+    docker_volumes_count                  = db.Column(db.Integer)
+    docker_volumes_size_bytes             = db.Column(db.BigInteger)
+    docker_volumes_reclaimable_bytes      = db.Column(db.BigInteger)
+    docker_build_cache_size_bytes         = db.Column(db.BigInteger)
+    docker_build_cache_reclaimable_bytes  = db.Column(db.BigInteger)
+
+    __table_args__ = (
+        # Enforce at most one row per (mount, collected_at) so that re-runs
+        # within the same second don't duplicate data.
+        db.UniqueConstraint("mount", "collected_at", name="uq_disk_mount_ts"),
+    )
+
+    def to_dict(self) -> dict:
+        return {
+            "id":           self.id,
+            "collected_at": self.collected_at.isoformat() if self.collected_at else None,
+            "mount":        self.mount,
+            "device":       self.device,
+            "total_kb":     self.total_kb,
+            "used_kb":      self.used_kb,
+            "avail_kb":     self.avail_kb,
+            "use_pct":      self.use_pct,
+            "docker": {
+                "images_size_bytes":             self.docker_images_size_bytes,
+                "images_reclaimable_bytes":      self.docker_images_reclaimable_bytes,
+                "images_active":                 self.docker_images_active,
+                "containers_size_bytes":         self.docker_containers_size_bytes,
+                "containers_active":             self.docker_containers_active,
+                "volumes_count":                 self.docker_volumes_count,
+                "volumes_size_bytes":            self.docker_volumes_size_bytes,
+                "volumes_reclaimable_bytes":     self.docker_volumes_reclaimable_bytes,
+                "build_cache_size_bytes":        self.docker_build_cache_size_bytes,
+                "build_cache_reclaimable_bytes": self.docker_build_cache_reclaimable_bytes,
+            } if self.mount == "__docker__" else None,
+        }

@@ -184,3 +184,224 @@ def api_cpu():
             "points": points,
         }
     )
+
+# ---------------------------------------------------------------------------
+# JSON API — Disk usage
+# ---------------------------------------------------------------------------
+
+@bp.route("/disk/summary")
+@login_required
+def api_disk_summary():
+    """
+    Return the most-recent disk snapshot for the dashboard tile.
+
+    Response shape::
+
+        {
+            "collected_at": "2025-01-01T00:00:00",
+            "filesystems": [
+                {
+                    "device":   "/dev/sda1",
+                    "mount":    "/",
+                    "total_kb": 102400,
+                    "used_kb":  51200,
+                    "avail_kb": 51200,
+                    "use_pct":  50
+                },
+                ...
+            ],
+            "docker": {
+                "images_size_bytes":             1234567,
+                "images_reclaimable_bytes":      123456,
+                "images_active":                 3,
+                "containers_size_bytes":         0,
+                "containers_active":             2,
+                "volumes_count":                 4,
+                "volumes_size_bytes":            9876,
+                "volumes_reclaimable_bytes":     0,
+                "build_cache_size_bytes":        0,
+                "build_cache_reclaimable_bytes": 0
+            },
+            "threshold_pct": 85
+        }
+
+    ``docker`` is ``null`` when the Docker socket is unavailable.
+    ``threshold_pct`` reflects the configured ``DISK_ALERT_THRESHOLD_PCT``.
+    """
+    from ..diskmon import get_disk_snapshot
+
+    snapshot = get_disk_snapshot(current_app._get_current_object())
+    if snapshot is None:
+        return jsonify({"error": "No disk snapshot available yet"}), 503
+
+    # Strip verbose image/volume lists — those belong in the detail endpoint.
+    docker = snapshot.get("docker")
+    if docker is not None:
+        docker = {k: v for k, v in docker.items() if k not in ("images", "volumes")}
+
+    return jsonify({
+        "collected_at":  snapshot.get("collected_at"),
+        "filesystems":   snapshot.get("filesystems", []),
+        "docker":        docker,
+        "threshold_pct": current_app.config.get("DISK_ALERT_THRESHOLD_PCT", 85),
+    })
+
+
+@bp.route("/disk/detail")
+@login_required
+def api_disk_detail():
+    """
+    Return the most-recent full snapshot including per-image and per-volume
+    detail lists, for the disk detail view.
+
+    Response shape::
+
+        {
+            "collected_at": "2025-01-01T00:00:00",
+            "filesystems": [ ... ],          # same as /disk/summary
+            "docker": {
+                ...summary fields...,
+                "images": [
+                    {
+                        "repository": "nginx",
+                        "tag":        "latest",
+                        "image_id":   "abc123",
+                        "size":       "142MB",
+                        "shared_size":"100MB",
+                        "unique_size":"42MB"
+                    },
+                    ...
+                ],
+                "volumes": [
+                    {"name": "myapp_data", "links": "1", "size": "9.6kB"},
+                    ...
+                ]
+            },
+            "threshold_pct": 85
+        }
+    """
+    from ..diskmon import get_disk_snapshot
+
+    snapshot = get_disk_snapshot(current_app._get_current_object())
+    if snapshot is None:
+        return jsonify({"error": "No disk snapshot available yet"}), 503
+
+    return jsonify({
+        "collected_at":  snapshot.get("collected_at"),
+        "filesystems":   snapshot.get("filesystems", []),
+        "docker":        snapshot.get("docker"),
+        "threshold_pct": current_app.config.get("DISK_ALERT_THRESHOLD_PCT", 85),
+    })
+
+@bp.route("/disk/history")
+@login_required
+def api_disk_history():
+    """
+    Return time-series disk usage from the database for charting.
+
+    Query params
+    ------------
+    mount   str   specific mount point, e.g. ``/`` or ``/var/lib/docker``
+                  use ``__docker__`` to get Docker sentinel rows
+    hours   int   look-back window (default 24, max 8760 = 1 year)
+    docker  "1"   shorthand for mount=__docker__
+
+    Response (filesystem mounts)::
+
+        {
+            "mount": "/",
+            "hours": 24,
+            "points": [
+                {"collected_at": "2025-01-01T00:00:00", "use_pct": 52,
+                 "used_kb": 53248, "total_kb": 102400},
+                ...
+            ]
+        }
+
+    Response (docker sentinel, mount=__docker__ or docker=1)::
+
+        {
+            "mount": "__docker__",
+            "hours": 24,
+            "points": [
+                {
+                    "collected_at": "2025-01-01T00:00:00",
+                    "images_size_bytes": 1234567,
+                    "volumes_size_bytes": 9876,
+                    "build_cache_size_bytes": 0,
+                    "total_bytes": 1244443
+                },
+                ...
+            ]
+        }
+    """
+    from ..model import db, DiskSnapshot
+    from datetime import datetime, timedelta
+
+    hours = min(int(request.args.get("hours", 24)), 8760)
+    since = datetime.now() - timedelta(hours=hours)
+
+    use_docker = request.args.get("docker") == "1"
+    mount = request.args.get("mount", "__docker__" if use_docker else None)
+
+    query = (
+        DiskSnapshot.query
+        .filter(DiskSnapshot.collected_at >= since)
+        .order_by(DiskSnapshot.collected_at.asc())
+    )
+
+    if mount:
+        query = query.filter(DiskSnapshot.mount == mount)
+    else:
+        # All real filesystems (exclude Docker sentinel)
+        query = query.filter(DiskSnapshot.mount != "__docker__")
+
+    rows = query.all()
+
+    if mount == "__docker__" or use_docker:
+        points = [
+            {
+                "collected_at":          r.collected_at.isoformat(),
+                "images_size_bytes":     r.docker_images_size_bytes,
+                "volumes_size_bytes":    r.docker_volumes_size_bytes,
+                "build_cache_size_bytes":r.docker_build_cache_size_bytes,
+                "total_bytes": (
+                    (r.docker_images_size_bytes or 0)
+                    + (r.docker_volumes_size_bytes or 0)
+                    + (r.docker_build_cache_size_bytes or 0)
+                ),
+            }
+            for r in rows
+        ]
+    else:
+        # Group by mount so the caller gets one series per mount
+        from collections import defaultdict
+        by_mount: dict = defaultdict(list)
+        for r in rows:
+            by_mount[r.mount].append({
+                "collected_at": r.collected_at.isoformat(),
+                "use_pct":      r.use_pct,
+                "used_kb":      r.used_kb,
+                "total_kb":     r.total_kb,
+            })
+
+        if mount:
+            # Single mount requested — return flat points list
+            return jsonify({
+                "mount":  mount,
+                "hours":  hours,
+                "points": by_mount.get(mount, []),
+            })
+
+        # No mount filter — return all mounts as a dict of series
+        return jsonify({
+            "mount":  None,
+            "hours":  hours,
+            "series": {m: pts for m, pts in by_mount.items()},
+        })
+
+    return jsonify({
+        "mount":  mount or "__docker__",
+        "hours":  hours,
+        "points": points,
+    })

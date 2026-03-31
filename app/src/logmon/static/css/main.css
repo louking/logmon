@@ -431,3 +431,85 @@ a:hover { color: var(--cyan); }
   .content { margin-left: 0; }
   .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
 }
+
+/* ------------------------------------------------------------------ disk usage */
+
+/* Usage bar used in both the dashboard tile and the detail table */
+.disk-bar-wrap {
+  min-width: 120px;
+  height: 8px;
+  background: var(--bg3);
+  border-radius: 99px;
+  overflow: hidden;
+}
+.disk-bar-fill {
+  height: 100%;
+  border-radius: 99px;
+  transition: width 0.3s ease;
+}
+.disk-bar-fill.ok      { background: var(--green); }
+.disk-bar-fill.warn    { background: var(--yellow); }
+.disk-bar-fill.danger  { background: var(--red); }
+
+/* Alert badge shown next to use% when over threshold */
+.disk-alert-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  background: rgba(248,81,73,0.15);
+  color: var(--red);
+  border: 1px solid rgba(248,81,73,0.3);
+  vertical-align: middle;
+}
+
+/* Docker summary strip at the bottom of the disk tile */
+.disk-docker-strip {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+.disk-docker-strip .strip-label {
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.04em;
+}
+.disk-docker-strip .strip-reclaim {
+  color: var(--text-dim);
+}
+
+/* Collected-at timestamp shown in tile footer and detail page header */
+.disk-collected-at {
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 0.04em;
+}
+
+/* Detail page: section headings between tables */
+.disk-section-heading {
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 28px 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* "no data" notice inside a table body */
+.disk-no-data {
+  text-align: center;
+  color: var(--text-dim);
+  padding: 18px 0;
+  font-size: 12px;
+}

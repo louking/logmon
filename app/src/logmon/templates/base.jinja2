@@ -62,6 +62,13 @@
       </a>
     </div>
 
+    <div class="nav-section">
+      <div class="nav-label">DISK</div>
+      <a href="{{ url_for('disk.disk_detail') }}" class="nav-link {% if request.endpoint == 'disk.disk_detail' %}active{% endif %}">
+        <span class="nav-icon">◫</span> Disk Usage
+      </a>
+    </div>
+
     <div class="sidebar-footer">
       {% if current_user.is_authenticated %}
       <div class="user-info">

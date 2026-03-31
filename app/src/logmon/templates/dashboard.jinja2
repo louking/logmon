@@ -41,6 +41,19 @@
   </div>
 </div>
 
+<div class="card mb-3" id="disk-tile">
+  <div class="card-header">
+    <span>Disk Usage</span>
+    <a href="{{ url_for('disk.disk_detail') }}" class="btn btn-ghost" style="font-size:11px;padding:3px 10px;">Details →</a>
+  </div>
+  <div class="card-body" id="disk-tile-body">
+    <div style="color:var(--text-dim);text-align:center;">Loading…</div>
+  </div>
+  <div style="padding:6px 18px 8px;border-top:1px solid var(--border);">
+    <span class="disk-collected-at" id="disk-tile-collected-at"></span>
+  </div>
+</div>
+
 <!-- Per-app error bar -->
 <div class="gap">
   <div class="card">
@@ -221,5 +234,97 @@ function refreshAll() {
 
 refreshAll();
 setInterval(refreshAll, 30000);
+
+(function () {
+  "use strict";
+
+  const THRESHOLD_PCT = {{ disk_threshold_pct | default(85) }};
+
+  function fmtKb(kb) {
+    if (kb >= 1048576) return (kb / 1048576).toFixed(1) + " GB";
+    if (kb >= 1024)    return (kb / 1024).toFixed(1) + " MB";
+    return kb + " KB";
+  }
+
+  function fmtBytes(b) {
+    if (b == null || b === 0) return "0 B";
+    if (b >= 1e9) return (b / 1e9).toFixed(1) + " GB";
+    if (b >= 1e6) return (b / 1e6).toFixed(1) + " MB";
+    if (b >= 1e3) return (b / 1e3).toFixed(1) + " kB";
+    return b + " B";
+  }
+
+  function barClass(pct) {
+    if (pct >= THRESHOLD_PCT)      return "danger";
+    if (pct >= THRESHOLD_PCT - 10) return "warn";
+    return "ok";
+  }
+
+  function renderTile(data) {
+    const body  = document.getElementById("disk-tile-body");
+    const lines = [];
+
+    // --- one row per filesystem ---
+    (data.filesystems || []).forEach(fs => {
+      const cls   = barClass(fs.use_pct);
+      const alert = fs.use_pct >= THRESHOLD_PCT
+        ? `<span class="disk-alert-badge">⚠</span>` : "";
+      lines.push(`
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:7px;">
+          <code style="min-width:9rem;font-size:11px;color:var(--text-muted);">${fs.mount}</code>
+          <div class="disk-bar-wrap" style="flex:1;">
+            <div class="disk-bar-fill ${cls}" style="width:${fs.use_pct}%"></div>
+          </div>
+          <span style="min-width:6rem;text-align:right;font-size:11px;color:var(--text-muted);">
+            ${fmtKb(fs.used_kb)} / ${fmtKb(fs.total_kb)}
+          </span>
+          <span style="min-width:2.5rem;text-align:right;font-size:11px;">${fs.use_pct}%${alert}</span>
+        </div>`);
+    });
+
+    // --- Docker summary strip ---
+    const d = data.docker;
+    if (d) {
+      const total = (d.images_size_bytes || 0)
+                  + (d.containers_size_bytes || 0)
+                  + (d.volumes_size_bytes || 0)
+                  + (d.build_cache_size_bytes || 0);
+      const reclaim = (d.images_reclaimable_bytes || 0)
+                    + (d.volumes_reclaimable_bytes || 0)
+                    + (d.build_cache_reclaimable_bytes || 0);
+      lines.push(`
+        <div class="disk-docker-strip">
+          <span class="strip-label">Docker</span>
+          <span>${fmtBytes(total)} total</span>
+          <span style="color:var(--text-dim)">·</span>
+          <span>${fmtBytes(d.images_size_bytes)} images</span>
+          <span style="color:var(--text-dim)">·</span>
+          <span>${fmtBytes(d.volumes_size_bytes)} volumes</span>
+          <span style="color:var(--text-dim)">·</span>
+          <span class="strip-reclaim">${fmtBytes(reclaim)} reclaimable</span>
+        </div>`);
+    }
+
+    body.innerHTML = lines.length
+      ? lines.join("")
+      : '<div style="color:var(--text-dim);text-align:center;">No data yet</div>';
+
+    const ts = document.getElementById("disk-tile-collected-at");
+    if (data.collected_at) ts.textContent = "updated " + data.collected_at;
+  }
+
+  function load() {
+    fetch("{{ url_for('api.api_disk_summary') }}")
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(renderTile)
+      .catch(err => {
+        document.getElementById("disk-tile-body").innerHTML =
+          `<div style="color:var(--red);text-align:center;">Disk data unavailable (${err})</div>`;
+      });
+  }
+
+  document.addEventListener("DOMContentLoaded", load);
+  setInterval(load, 60000);
+})();
 </script>
 {% endblock %}

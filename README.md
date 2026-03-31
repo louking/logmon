@@ -27,6 +27,7 @@ logmon/
         ├── settings.py              # configuration + AppEntry dataclass
         ├── model.py                 # SQLAlchemy models (merge into your own)
         ├── follower.py              # background log-tail threads + Redis buffer
+        ├── diskmon.py               # background disk + Docker usage monitor
         ├── logparser.py             # app log + access log parsers
         ├── alerter.py               # email alert sender
         ├── access_analysis.py       # bad-actor queries + CPU metrics wrapper
@@ -37,11 +38,12 @@ logmon/
         │   ├── dashboard.py
         │   ├── logs.py
         │   ├── sns.py
-        │   ├── api.py               # JSON API for live tail + stats
+        │   ├── api.py               # JSON API for live tail, stats, and disk usage
         │   └── access.py            # bad-actor report + CPU utilization views
         ├── templates/
         │   ├── base.jinja2
         │   ├── dashboard.jinja2
+        │   ├── disk_detail.jinja2
         │   ├── live_tail.jinja2
         │   ├── logs_index.jinja2
         │   ├── app_log.jinja2
@@ -64,7 +66,7 @@ logmon/
 | Service | Purpose |
 | --- | --- |
 | `app` | Serves the dashboard UI, SNS webhook, live-tail API, and access-analysis pages |
-| `follower` | Tails log files; pushes lines to Redis and events to DB |
+| `follower` | Tails log files; pushes lines to Redis and events to DB; collects disk usage stats |
 | `redis` | Shared live-tail ring buffer between `app` and `follower` |
 | `db` | MySQL database (replace stub with your own service definition) |
 
@@ -108,6 +110,48 @@ Edit both files:
   - "C:/Users/you/My Apps/myapp/logs:/logs/myapp:ro"
   ```
 
+**Disk monitoring** — the `follower` service collects disk and Docker usage
+stats every 60 seconds and shows them on the dashboard. The disk detail page
+(`/disk/detail`) breaks down usage by filesystem and Docker component
+(images, volumes, build cache).
+
+Because `diskmon` runs inside the container, it can only see filesystems that
+are mounted into the `follower` container. To monitor real host volumes, add
+read-only bind mounts under a `/host/` prefix in `docker-compose.override.yml`:
+
+```yaml
+follower:
+  volumes:
+    - /:/host/root:ro            # monitor host /
+    - /mnt/data:/host/mnt/data:ro   # monitor host /mnt/data
+```
+
+`diskmon` detects the `/host/` prefix and strips it for display, so `/host/root`
+appears as `/` in the dashboard.
+
+To enable Docker image and volume stats, also mount the Docker socket:
+
+```yaml
+# Linux
+- /var/run/docker.sock:/var/run/docker.sock:ro
+
+# Windows (Docker Desktop) — use the named pipe with forward-slash syntax:
+- //./pipe/docker_engine:/var/run/docker.sock
+```
+
+If the socket is absent, filesystem stats still work but Docker breakdowns
+are omitted.
+
+The following environment variables control disk monitoring behaviour
+(all optional, defaults shown):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `DISK_ALERT_THRESHOLD_PCT` | `85` | % used at which an alert email is sent |
+| `DISK_ALERT_SUPPRESS_SECONDS` | `14400` | seconds between repeat alerts for the same mount (4 h); overrides `ALERT_SUPPRESS_SECONDS` for disk alerts |
+| `DISK_CHECK_INTERVAL` | `60` | seconds between collection runs |
+| `DISK_SNAPSHOT_HISTORY` | `1440` | snapshots kept in Redis (24 h at 1-per-min) |
+
 **Secret files** — create these before running `docker compose up`.
 All are gitignored. Generate random values with:
 `python -c "import secrets; print(secrets.token_hex(32))"`
@@ -128,7 +172,7 @@ files, so they never appear in environment variables (which are visible via
 
 **`config/logapps.yml`** — one entry per app, using the container-side path:
 
-```
+```yaml
 apps:
   myapp:
     log_dir: /logs/myapp
@@ -146,14 +190,14 @@ The follower expects two files per app directory:
 
 ### 2. Create the external Docker network (once, on the host)
 
-```
+```bash
 docker network create users
 ```
 
 The `users` network connects logmon to your shared users DB. In the other
 stack's `docker-compose.yml`:
 
-```
+```yaml
 networks:
   users:
     external: true
@@ -280,6 +324,61 @@ apps:
     alert_suppress_seconds: 7200   # 2 hours for this app
 ```
 
+Disk usage alerts use a separate suppression window controlled by
+`DISK_ALERT_SUPPRESS_SECONDS` (default 14400 s = 4 h) so that a nearly-full
+disk does not flood the same inbox as application exceptions. If
+`DISK_ALERT_SUPPRESS_SECONDS` is not set, `ALERT_SUPPRESS_SECONDS` is used
+as a fallback.
+
+---
+
+## Disk usage
+
+The **Disk Usage** page (`/disk/detail`) shows:
+
+* **Filesystems** — mount point, device, total/used/available size, and a
+  colour-coded usage bar (green → yellow → red as usage approaches
+  `DISK_ALERT_THRESHOLD_PCT`).
+* **Docker** — aggregated sizes for images, containers, volumes, and build
+  cache, with reclaimable amounts shown separately.
+* **Images** — per-image repository, tag, and size breakdown.
+* **Volumes** — per-volume name and size.
+
+A summary tile on the dashboard shows the same filesystem bars and a Docker
+totals strip, refreshed every 60 seconds.
+
+### Alert emails
+
+An alert email is sent to `ALERT_RECIPIENTS` when any monitored filesystem
+reaches `DISK_ALERT_THRESHOLD_PCT` percent used. Repeat alerts for the same
+mount are suppressed for `DISK_ALERT_SUPPRESS_SECONDS` (default 4 h).
+
+### Disk usage history
+
+Snapshots are stored in the `disk_snapshot` table (one row per filesystem per
+collection run, plus a `__docker__` sentinel row for Docker totals). This
+enables time-series queries such as:
+
+```sql
+SELECT collected_at, use_pct
+FROM disk_snapshot
+WHERE mount = '/'
+ORDER BY collected_at;
+```
+
+The `/api/disk/history` endpoint exposes this data for charting:
+
+```
+GET /api/disk/history?mount=/&hours=24
+GET /api/disk/history?docker=1&hours=168
+```
+
+Rows accumulate indefinitely. To purge data older than 90 days:
+
+```sql
+DELETE FROM disk_snapshot WHERE collected_at < NOW() - INTERVAL 90 DAY;
+```
+
 ---
 
 ## Bad actor analysis
@@ -331,7 +430,8 @@ showing the top offenders with a link to the full report. The tile is hidden
 when no IPs breach the threshold. It refreshes every 30 seconds alongside the
 other dashboard panels.
 
-Configure the threshold, window, and excluded IPs in `docker-compose.override.yml` as shown in the Configuration section above.
+Configure the threshold, window, and excluded IPs in `docker-compose.override.yml`
+as shown in the Configuration section above.
 
 ### Country lookup
 
@@ -392,14 +492,13 @@ project uses a different name.
 
 | Database | Bind key | Models |
 | --- | --- | --- |
-| `DATABASE_URL` | (default) | `LogEvent`, `AccessEvent`, `AlertSuppression`, `SnsNotification` |
+| `DATABASE_URL` | (default) | `LogEvent`, `AccessEvent`, `AlertSuppression`, `SnsNotification`, `DiskSnapshot` |
 | `USERS_DATABASE_URL` | `users` | `User`, `Role` — shared with other apps |
 
 Flask-Migrate runs only against the default DB. The `model.py` file provided
-contains both groups of models — merge the logmon-specific ones (`LogEvent`,
-`AccessEvent`, `AlertSuppression`, `SnsNotification`) into your existing
-`model.py` and remove the `from app import db` import line since `db` will
-already be in scope.
+contains both groups of models — merge the logmon-specific ones into your
+existing `model.py` and remove the `from app import db` import line since `db`
+will already be in scope.
 
 The `AccessEvent` table is populated by the `follower` service as it tails
 access logs. Both the bad-actor report and the dashboard tile query this table
@@ -411,3 +510,7 @@ performance:
 CREATE INDEX ix_access_event_time_ip
     ON access_event (occurred_at, client_ip);
 ```
+
+The `DiskSnapshot` table stores one row per filesystem per collection run, plus
+a `__docker__` sentinel row for Docker totals. Rows accumulate indefinitely;
+see [Disk usage history](#disk-usage-history) above for purge instructions.

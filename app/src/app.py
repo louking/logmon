@@ -41,23 +41,24 @@ import time
 @app.cli.command("run-follower")
 def run_follower() -> None:
     """
-    Start the log follower and block forever.
+    Start the log follower and disk monitor, then block forever.
 
     This is the entrypoint for the 'follower' Docker Compose service.
-    It runs in a single container so there is exactly one FollowerManager
-    and one FileFollower thread per log file — no duplication regardless of
-    how many 'web' workers are running.
+    It runs in a single container so there is exactly one FollowerManager,
+    one FileFollower thread per log file, and one DiskMonitor thread —
+    no duplication regardless of how many 'web' workers are running.
     """
     from logmon.follower import start_follower
+    from logmon.diskmon import start_disk_monitor
 
     click.echo("Starting log follower...")
     with app.app_context():
         start_follower(app)
-        click.echo("Follower running. Press Ctrl+C to stop.")
+        start_disk_monitor(app)
+        click.echo("Follower and disk monitor running. Press Ctrl+C to stop.")
         try:
             while True:
                 time.sleep(60)
         except KeyboardInterrupt:
             click.echo("Follower stopped.")
-
 

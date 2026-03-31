@@ -162,6 +162,17 @@ class Config(object):
     ALERT_RECIPIENTS: list[str] = os.environ.get("ALERT_RECIPIENTS", "").split(",")
     ALERT_SUPPRESS_SECONDS: int = int(os.environ.get("ALERT_SUPPRESS_SECONDS", 3600))
 
+    # --------------------------------------------------------- disk monitor
+    # Percentage at which a filesystem triggers an alert email.
+    # Uses the same ALERT_SUPPRESS_SECONDS suppression window as log alerts.
+    DISK_ALERT_THRESHOLD_PCT: int = int(os.environ.get("DISK_ALERT_THRESHOLD_PCT", 85))
+    # How often (seconds) to collect df / docker system df stats.
+    DISK_CHECK_INTERVAL: int = int(os.environ.get("DISK_CHECK_INTERVAL", 60))
+    # How many snapshots to retain in Redis (default 1440 = 24 h at 1/min).
+    DISK_SNAPSHOT_HISTORY: int = int(os.environ.get("DISK_SNAPSHOT_HISTORY", 1440))
+    # Minimum seconds between alerts for the same filesystem (default 4 h).
+    DISK_ALERT_SUPPRESS_SECONDS: int = int(os.environ.get("DISK_ALERT_SUPPRESS_SECONDS", 14400))
+    
     # ------------------------------------------------------------ SNS
     SNS_TOPIC_ARNS_ALLOWED: list[str] = [
         t.strip() for t in os.environ.get("SNS_TOPIC_ARNS", "").split(",") if t.strip()

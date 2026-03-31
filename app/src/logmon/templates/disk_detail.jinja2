@@ -1,0 +1,217 @@
+{% extends "base.jinja2" %}
+
+{% block title %}Disk Usage{% endblock %}
+{% block page_title %}Disk Usage{% endblock %}
+
+{% block content %}
+<div style="display:flex;align-items:baseline;gap:14px;margin-bottom:20px;">
+  <span class="disk-collected-at" id="disk-collected-at"></span>
+</div>
+
+{# ---------------------------------------------------------------- Filesystems #}
+<div class="disk-section-heading">Filesystems</div>
+<table class="data-table" id="fs-table">
+  <thead>
+    <tr>
+      <th>Mount</th>
+      <th>Device</th>
+      <th>Total</th>
+      <th>Used</th>
+      <th>Available</th>
+      <th>Use%</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody id="fs-tbody">
+    <tr><td colspan="7" class="disk-no-data">Loading…</td></tr>
+  </tbody>
+</table>
+
+{# ---------------------------------------------------------------- Docker summary #}
+<div class="disk-section-heading" id="docker-section-heading">Docker</div>
+
+<div id="docker-unavailable" style="display:none;color:var(--text-muted);font-size:12px;margin-bottom:16px;">
+  Docker socket unavailable — mount <code>/var/run/docker.sock</code> into the
+  follower container (Linux) or set <code>DOCKER_HOST</code> (Windows) to enable
+  Docker stats.
+</div>
+
+<table class="data-table" id="docker-summary-table" style="display:none;max-width:520px;">
+  <thead>
+    <tr>
+      <th>Category</th>
+      <th>Size</th>
+      <th>Reclaimable</th>
+    </tr>
+  </thead>
+  <tbody id="docker-summary-tbody"></tbody>
+</table>
+
+{# ---------------------------------------------------------------- Docker images #}
+<div class="disk-section-heading" id="docker-images-heading" style="display:none;">Images</div>
+<table class="data-table" id="docker-images-table" style="display:none;">
+  <thead>
+    <tr>
+      <th>Repository</th>
+      <th>Tag</th>
+      <th>Image ID</th>
+      <th>Size</th>
+      <th>Shared</th>
+      <th>Unique</th>
+    </tr>
+  </thead>
+  <tbody id="docker-images-tbody"></tbody>
+</table>
+
+{# ---------------------------------------------------------------- Docker volumes #}
+<div class="disk-section-heading" id="docker-volumes-heading" style="display:none;">Volumes</div>
+<table class="data-table" id="docker-volumes-table" style="display:none;">
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Links</th>
+      <th>Size</th>
+    </tr>
+  </thead>
+  <tbody id="docker-volumes-tbody"></tbody>
+</table>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+
+  const THRESHOLD_PCT = {{ threshold_pct | default(85) }};
+
+  function fmtKb(kb) {
+    if (kb == null) return "–";
+    if (kb >= 1048576) return (kb / 1048576).toFixed(1) + " GB";
+    if (kb >= 1024)    return (kb / 1024).toFixed(1) + " MB";
+    return kb + " KB";
+  }
+
+  function fmtBytes(b) {
+    if (b == null) return "–";
+    if (b >= 1e9) return (b / 1e9).toFixed(1) + " GB";
+    if (b >= 1e6) return (b / 1e6).toFixed(1) + " MB";
+    if (b >= 1e3) return (b / 1e3).toFixed(1) + " kB";
+    return b + " B";
+  }
+
+  function barClass(pct) {
+    if (pct >= THRESHOLD_PCT)      return "danger";
+    if (pct >= THRESHOLD_PCT - 10) return "warn";
+    return "ok";
+  }
+
+  function renderFilesystems(filesystems) {
+    const tbody = document.getElementById("fs-tbody");
+    if (!filesystems || filesystems.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="7" class="disk-no-data">No filesystem data</td></tr>';
+      return;
+    }
+    tbody.innerHTML = filesystems.map(fs => {
+      const cls   = barClass(fs.use_pct);
+      const bar   = `<div class="disk-bar-wrap"><div class="disk-bar-fill ${cls}" style="width:${fs.use_pct}%"></div></div>`;
+      const alert = fs.use_pct >= THRESHOLD_PCT
+        ? `<span class="disk-alert-badge">⚠ high</span>` : "";
+      return `<tr>
+        <td><code>${fs.mount}</code></td>
+        <td style="color:var(--text-muted)">${fs.device || "–"}</td>
+        <td>${fmtKb(fs.total_kb)}</td>
+        <td>${fmtKb(fs.used_kb)}</td>
+        <td>${fmtKb(fs.avail_kb)}</td>
+        <td>${fs.use_pct}%${alert}</td>
+        <td style="min-width:140px">${bar}</td>
+      </tr>`;
+    }).join("");
+  }
+
+  function renderDockerSummary(docker) {
+    if (!docker) {
+      document.getElementById("docker-unavailable").style.display = "";
+      return;
+    }
+    const tbody = document.getElementById("docker-summary-tbody");
+    const rows = [
+      ["Images",      fmtBytes(docker.images_size_bytes),
+                      fmtBytes(docker.images_reclaimable_bytes),
+                      `${docker.images_active || 0} active`],
+      ["Containers",  fmtBytes(docker.containers_size_bytes),
+                      "–",
+                      `${docker.containers_active || 0} running`],
+      ["Volumes",     fmtBytes(docker.volumes_size_bytes),
+                      fmtBytes(docker.volumes_reclaimable_bytes),
+                      `${docker.volumes_count || 0} total`],
+      ["Build cache", fmtBytes(docker.build_cache_size_bytes),
+                      fmtBytes(docker.build_cache_reclaimable_bytes),
+                      `${docker.build_cache_count || 0} entries`],
+    ];
+    tbody.innerHTML = rows.map(([cat, size, reclaim, note]) =>
+      `<tr>
+        <td>${cat} <span style="color:var(--text-dim);font-size:11px;">${note}</span></td>
+        <td>${size}</td>
+        <td style="color:var(--text-muted)">${reclaim}</td>
+      </tr>`
+    ).join("");
+    document.getElementById("docker-summary-table").style.display = "";
+  }
+
+  function renderDockerImages(images) {
+    if (!images || images.length === 0) return;
+    document.getElementById("docker-images-heading").style.display = "";
+    document.getElementById("docker-images-table").style.display = "";
+    document.getElementById("docker-images-tbody").innerHTML = images.map(img =>
+      `<tr>
+        <td>${img.repository}</td>
+        <td><code>${img.tag}</code></td>
+        <td style="color:var(--text-muted)"><code>${img.image_id}</code></td>
+        <td>${img.size}</td>
+        <td style="color:var(--text-muted)">${img.shared_size || "–"}</td>
+        <td style="color:var(--text-muted)">${img.unique_size || "–"}</td>
+      </tr>`
+    ).join("");
+  }
+
+  function renderDockerVolumes(volumes) {
+    if (!volumes || volumes.length === 0) return;
+    document.getElementById("docker-volumes-heading").style.display = "";
+    document.getElementById("docker-volumes-table").style.display = "";
+    document.getElementById("docker-volumes-tbody").innerHTML = volumes.map(v =>
+      `<tr>
+        <td><code>${v.name}</code></td>
+        <td style="color:var(--text-muted)">${v.links}</td>
+        <td>${v.size}</td>
+      </tr>`
+    ).join("");
+  }
+
+  function load() {
+    fetch("{{ url_for('api.api_disk_detail') }}")
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        if (data.collected_at) {
+          document.getElementById("disk-collected-at").textContent =
+            "collected " + data.collected_at;
+        }
+        renderFilesystems(data.filesystems);
+        renderDockerSummary(data.docker);
+        if (data.docker) {
+          renderDockerImages(data.docker.images);
+          renderDockerVolumes(data.docker.volumes);
+        }
+      })
+      .catch(err => {
+        document.getElementById("fs-tbody").innerHTML =
+          `<tr><td colspan="7" class="disk-no-data" style="color:var(--red)">
+            Failed to load data (${err})
+          </td></tr>`;
+      });
+  }
+
+  document.addEventListener("DOMContentLoaded", load);
+})();
+</script>
+{% endblock %}

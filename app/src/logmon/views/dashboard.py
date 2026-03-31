@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from flask import Blueprint, render_template
+from flask import Blueprint, render_template, current_app
 from flask_security import login_required
 
 from .auth import require_super_admin
@@ -14,4 +14,7 @@ bp.before_request(require_super_admin)
 def index():
     # All data is loaded client-side via /api/stats, /api/recent_errors,
     # and /api/sns/recent — no server-side DB queries needed here.
-    return render_template("dashboard.jinja2")
+    return render_template(
+        "dashboard.jinja2", 
+        disk_threshold_pct=current_app.config.get("DISK_ALERT_THRESHOLD_PCT", 85)
+    )

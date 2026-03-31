@@ -139,6 +139,7 @@ def create_app(config_obj, configfiles=None, init_for_operation=True):
     from .views.sns import bp as sns_bp
     from .views.api import bp as api_bp
     from .views.access import bp as access_bp
+    from .views.disk import bp as disk_bp
 
     app.register_blueprint(userrole)
     app.register_blueprint(frontend)
@@ -148,6 +149,7 @@ def create_app(config_obj, configfiles=None, init_for_operation=True):
     app.register_blueprint(sns_bp)
     app.register_blueprint(api_bp)
     app.register_blueprint(access_bp)
+    app.register_blueprint(disk_bp)
 
     # need to force app context else get
     #    RuntimeError: Working outside of application context.

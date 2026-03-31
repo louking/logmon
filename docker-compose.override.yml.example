@@ -42,6 +42,13 @@ services:
   follower:
     environment:
       <<: *app-env
+
+      # --- disk monitor (all optional, shown with defaults) ---
+      DISK_ALERT_THRESHOLD_PCT: "85"    # alert when any filesystem >= this %
+      DISK_CHECK_INTERVAL: "60"         # seconds between df / docker checks
+      DISK_ALERT_SUPPRESS_SECONDS: "14400" # seconds between repeat alerts for the same mount (4 h); overrides ALERT_SUPPRESS_SECONDS for disk alerts
+      DISK_SNAPSHOT_HISTORY: "1440"     # snapshots to keep in Redis (24 h @ 1/min)
+
     volumes:
       # HOW VOLUME MOUNTS CONNECT TO config/logapps.yml
       # -------------------------------------------------
@@ -66,6 +73,15 @@ services:
 
       # If any access log is in a different directory, mount that too:
       # - /var/log/apache2:/var/log/apache2:ro
+
+      # docker disk management
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Windows (Docker Desktop) — comment out the Linux line above and use:
+      # - //./pipe/docker_engine:/var/run/docker.sock
+
+      # disk monitoring volumes
+      - /:/host/root:ro
+      - /mnt/x:/host/mnt/x:ro   # repeat for each volume you want to monitor
 
   db:
     environment:
