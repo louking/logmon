@@ -36,6 +36,7 @@ logmon/
         ├── views/
         │   ├── auth.py              # super-admin role check
         │   ├── dashboard.py
+        │   ├── disk.py              # disk detail + history views
         │   ├── logs.py
         │   ├── sns.py
         │   ├── api.py               # JSON API for live tail, stats, and disk usage
@@ -44,6 +45,7 @@ logmon/
         │   ├── base.jinja2
         │   ├── dashboard.jinja2
         │   ├── disk_detail.jinja2
+        │   ├── disk_history.jinja2
         │   ├── live_tail.jinja2
         │   ├── logs_index.jinja2
         │   ├── app_log.jinja2
@@ -113,7 +115,8 @@ Edit both files:
 **Disk monitoring** — the `follower` service collects disk and Docker usage
 stats every 60 seconds and shows them on the dashboard. The disk detail page
 (`/disk/detail`) breaks down usage by filesystem and Docker component
-(images, volumes, build cache).
+(images, volumes, build cache). The disk history page (`/disk/history`)
+charts usage over time for each filesystem and Docker component.
 
 Because `diskmon` runs inside the container, it can only see filesystems that
 are mounted into the `follower` container. To monitor real host volumes, add
@@ -129,7 +132,8 @@ follower:
 `diskmon` detects the `/host/` prefix and strips it for display, so `/host/root`
 appears as `/` in the dashboard.
 
-To enable Docker image and volume stats, also mount the Docker socket:
+To enable Docker image and volume stats, also mount the Docker socket and
+ensure the `docker-cli` package is installed in the image (it is, by default):
 
 ```yaml
 # Linux
@@ -151,6 +155,7 @@ The following environment variables control disk monitoring behaviour
 | `DISK_ALERT_SUPPRESS_SECONDS` | `14400` | seconds between repeat alerts for the same mount (4 h); overrides `ALERT_SUPPRESS_SECONDS` for disk alerts |
 | `DISK_CHECK_INTERVAL` | `60` | seconds between collection runs |
 | `DISK_SNAPSHOT_HISTORY` | `1440` | snapshots kept in Redis (24 h at 1-per-min) |
+| `DISK_EXCLUDE_MOUNTS` | _(none)_ | comma-separated mount points to hide from the UI and suppress alerts for (e.g. `/boot,/boot/efi`) |
 
 **Secret files** — create these before running `docker compose up`.
 All are gitignored. Generate random values with:
@@ -342,7 +347,7 @@ The **Disk Usage** page (`/disk/detail`) shows:
 * **Docker** — aggregated sizes for images, containers, volumes, and build
   cache, with reclaimable amounts shown separately.
 * **Images** — per-image repository, tag, and size breakdown.
-* **Volumes** — per-volume name and size.
+* **Volumes** — per-volume name and size, sorted largest to smallest.
 
 A summary tile on the dashboard shows the same filesystem bars and a Docker
 totals strip, refreshed every 60 seconds.
@@ -353,24 +358,22 @@ An alert email is sent to `ALERT_RECIPIENTS` when any monitored filesystem
 reaches `DISK_ALERT_THRESHOLD_PCT` percent used. Repeat alerts for the same
 mount are suppressed for `DISK_ALERT_SUPPRESS_SECONDS` (default 4 h).
 
-### Disk usage history
+### Disk history
 
-Snapshots are stored in the `disk_snapshot` table (one row per filesystem per
-collection run, plus a `__docker__` sentinel row for Docker totals). This
-enables time-series queries such as:
+The **Disk History** page (`/disk/history`) charts filesystem usage percentage
+and Docker component sizes over the last 7 or 30 days. Each filesystem gets
+its own chart with a dashed threshold line at `DISK_ALERT_THRESHOLD_PCT`.
+The Docker chart overlays images, volumes, build cache, and container sizes
+on a single chart.
 
-```sql
-SELECT collected_at, use_pct
-FROM disk_snapshot
-WHERE mount = '/'
-ORDER BY collected_at;
-```
-
-The `/api/disk/history` endpoint exposes this data for charting:
+History data is stored in the `disk_snapshot` table (one row per filesystem
+per collection run, plus a `__docker__` sentinel row for Docker totals). The
+`/api/disk/history` endpoint exposes this data directly:
 
 ```
-GET /api/disk/history?mount=/&hours=24
-GET /api/disk/history?docker=1&hours=168
+GET /api/disk/history?hours=168          # all filesystems, last 7 days
+GET /api/disk/history?mount=/&hours=720  # single mount, last 30 days
+GET /api/disk/history?docker=1&hours=168 # Docker totals, last 7 days
 ```
 
 Rows accumulate indefinitely. To purge data older than 90 days:
@@ -513,4 +516,4 @@ CREATE INDEX ix_access_event_time_ip
 
 The `DiskSnapshot` table stores one row per filesystem per collection run, plus
 a `__docker__` sentinel row for Docker totals. Rows accumulate indefinitely;
-see [Disk usage history](#disk-usage-history) above for purge instructions.
+see [Disk history](#disk-history) above for purge instructions.

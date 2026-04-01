@@ -1,0 +1,314 @@
+{% extends "base.jinja2" %}
+
+{% block title %}Disk History – LogMon{% endblock %}
+{% block page_title %}Disk History{% endblock %}
+
+{% block head_extra %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+
+<!-- Controls -->
+<div class="card gap">
+  <div class="card-body" style="padding:14px 18px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+    <button class="btn btn-ghost range-btn" data-days="7">7 days</button>
+    <button class="btn btn-ghost range-btn" data-days="30">30 days</button>
+    <span id="history-status" style="margin-left:10px;font-size:11px;color:var(--text-muted);"></span>
+  </div>
+</div>
+
+<!-- Filesystem charts -->
+<div class="disk-section-heading">Filesystem Usage Over Time</div>
+<div id="fs-charts">
+  <div class="disk-no-data">Select a time range above.</div>
+</div>
+
+<!-- Docker chart -->
+<div class="disk-section-heading" style="margin-top:32px;">Docker Usage Over Time</div>
+<div id="docker-chart-wrap" class="card gap" style="display:none;">
+  <div class="card-header">Docker component sizes</div>
+  <div class="card-body" style="padding:14px 18px;position:relative;min-height:220px;">
+    <canvas id="docker-chart"></canvas>
+  </div>
+</div>
+<div id="docker-unavailable" class="disk-no-data" style="display:none;">
+  No Docker history available.
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+
+  const THRESHOLD_PCT = {{ threshold_pct | default(85) }};
+
+  // ---------------------------------------------------------------- css vars
+  function cv(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  // ---------------------------------------------------------------- helpers
+  function fmtKb(kb) {
+    if (kb == null) return "–";
+    if (kb >= 1048576) return (kb / 1048576).toFixed(1) + " GB";
+    if (kb >= 1024)    return (kb / 1024).toFixed(1)   + " MB";
+    return kb + " KB";
+  }
+
+  function fmtBytes(b) {
+    if (b == null) return "–";
+    if (b >= 1e9) return (b / 1e9).toFixed(1) + " GB";
+    if (b >= 1e6) return (b / 1e6).toFixed(1) + " MB";
+    if (b >= 1e3) return (b / 1e3).toFixed(1) + " kB";
+    return b + " B";
+  }
+
+  function fmtTs(isoStr) {
+    const d = new Date(isoStr);
+    return d.toLocaleString([], {
+      month: 'short', day: 'numeric',
+      hour: '2-digit', minute: '2-digit',
+      hour12: false,
+    });
+  }
+
+  function tickLabel(dates, idx, spanDays) {
+    if (idx < 0 || idx >= dates.length) return '';
+    const d    = new Date(dates[idx]);
+    const time = d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', hour12: false});
+    if (!spanDays) return time;
+    const day  = d.toLocaleDateString([], {month: 'short', day: 'numeric'});
+    return [day, time];
+  }
+
+  function lineColor(pct) {
+    if (pct >= THRESHOLD_PCT)      return cv('--red');
+    if (pct >= THRESHOLD_PCT - 10) return cv('--yellow');
+    return cv('--green');
+  }
+
+  // ---------------------------------------------------------------- chart registry
+  const _charts = {};
+
+  function destroyAll() {
+    Object.values(_charts).forEach(ch => ch.destroy());
+    Object.keys(_charts).forEach(k => delete _charts[k]);
+  }
+
+  // ---------------------------------------------------------------- base chart options
+  function baseOptions(dates, yLabel, yFmt) {
+    const spanDays = dates.length > 1 && (
+      new Date(dates[0]).toLocaleDateString() !==
+      new Date(dates[dates.length - 1]).toLocaleDateString()
+    );
+    return {
+      responsive: true,
+      animation:  false,
+      interaction: { mode: 'index', axis: 'x', intersect: false },
+      scales: {
+        x: {
+          ticks: {
+            color:         cv('--text-muted'),
+            maxTicksLimit: spanDays ? 14 : 12,
+            font:          { size: 10 },
+            minRotation:   spanDays ? 30 : 0,
+            maxRotation:   spanDays ? 45 : 0,
+            callback(val) { return tickLabel(dates, Math.round(val), spanDays); },
+          },
+          grid: { color: cv('--border') },
+        },
+        y: {
+          title: { display: true, text: yLabel, color: cv('--text-muted'), font: { size: 10 } },
+          ticks: { color: cv('--text-muted'), font: { size: 10 }, callback: yFmt },
+          grid:  { color: cv('--border') },
+        },
+      },
+      plugins: {
+        legend: { labels: { color: cv('--text-muted'), font: { size: 11 } } },
+        tooltip: {
+          backgroundColor: cv('--bg3'),
+          titleColor:      cv('--text'),
+          bodyColor:       cv('--text-muted'),
+          borderColor:     cv('--border2'),
+          borderWidth:     1,
+          callbacks: {
+            title: items => fmtTs(dates[items[0].dataIndex]),
+            label: ctx  => ' ' + ctx.dataset.label + ': ' + yFmt(ctx.parsed.y),
+          },
+        },
+      },
+    };
+  }
+
+  // ---------------------------------------------------------------- render filesystem charts
+  function renderFsCharts(series) {
+    const wrap   = document.getElementById('fs-charts');
+    const mounts = Object.keys(series).sort();
+
+    if (mounts.length === 0) {
+      wrap.innerHTML = '<div class="disk-no-data">No filesystem history available for this window.</div>';
+      return;
+    }
+
+    wrap.innerHTML = '';
+
+    mounts.forEach(mount => {
+      const points   = series[mount];
+      const dates    = points.map(p => p.collected_at);
+      const useData  = points.map(p => p.use_pct);
+      const lastPct  = useData.length ? useData[useData.length - 1] : 0;
+      const color    = lineColor(lastPct);
+      const safeId   = 'chart-' + mount.replace(/[^a-z0-9]/gi, '-');
+
+      // stat summary for card header
+      let statText = '';
+      if (points.length) {
+        const last = points[points.length - 1];
+        statText = `current ${last.use_pct}%  ·  ${fmtKb(last.used_kb)} / ${fmtKb(last.total_kb)}`;
+      }
+
+      const card = document.createElement('div');
+      card.className = 'card gap';
+      card.innerHTML = `
+        <div class="card-header">
+          <code style="font-size:11px;">${mount}</code>
+          <span style="font-size:11px;color:var(--text-muted);">${statText}</span>
+        </div>
+        <div class="card-body" style="padding:14px 18px;position:relative;min-height:180px;">
+          <canvas id="${safeId}"></canvas>
+        </div>`;
+      wrap.appendChild(card);
+
+      const opts       = baseOptions(dates, 'Use %', v => v + '%');
+      opts.scales.y.min = 0;
+      opts.scales.y.max = 100;
+      opts.plugins.legend.display = false;
+
+      // override tooltip label since legend is hidden
+      opts.plugins.tooltip.callbacks.label = ctx => ` ${ctx.parsed.y}%`;
+
+      const ctx = card.querySelector(`#${safeId}`).getContext('2d');
+      _charts[mount] = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: dates.map((_, i) => i),
+          datasets: [
+            {
+              label:           mount,
+              data:            useData,
+              borderColor:     color,
+              backgroundColor: color + '22',
+              borderWidth:     1.5,
+              pointRadius:     points.length > 300 ? 0 : 2,
+              fill:            true,
+              tension:         0.2,
+            },
+            {
+              label:       'threshold',
+              data:        dates.map(() => THRESHOLD_PCT),
+              borderColor: cv('--red') + '66',
+              borderWidth: 1,
+              borderDash:  [4, 4],
+              pointRadius: 0,
+              fill:        false,
+            },
+          ],
+        },
+        options: opts,
+      });
+    });
+  }
+
+  // ---------------------------------------------------------------- render Docker chart
+  function renderDockerChart(points) {
+    const wrap    = document.getElementById('docker-chart-wrap');
+    const unavail = document.getElementById('docker-unavailable');
+
+    if (!points || points.length === 0) {
+      unavail.style.display = '';
+      return;
+    }
+
+    wrap.style.display = '';
+    const dates = points.map(p => p.collected_at);
+
+    const datasets = [
+      { label: 'Images',      key: 'images_size_bytes',      color: '--accent'  },
+      { label: 'Volumes',     key: 'volumes_size_bytes',      color: '--green'   },
+      { label: 'Build cache', key: 'build_cache_size_bytes',  color: '--yellow'  },
+      { label: 'Containers',  key: 'containers_size_bytes',   color: '--purple'  },
+    ].map(ds => ({
+      label:           ds.label,
+      data:            points.map(p => p[ds.key] || 0),
+      borderColor:     cv(ds.color),
+      backgroundColor: cv(ds.color) + '22',
+      borderWidth:     1.5,
+      pointRadius:     points.length > 300 ? 0 : 2,
+      fill:            false,
+      tension:         0.2,
+    }));
+
+    const opts = baseOptions(dates, 'Size', fmtBytes);
+
+    const ctx = document.getElementById('docker-chart').getContext('2d');
+    _charts['__docker__'] = new Chart(ctx, {
+      type: 'line',
+      data: { labels: dates.map((_, i) => i), datasets },
+      options: opts,
+    });
+  }
+
+  // ---------------------------------------------------------------- load
+  function load(days) {
+    document.getElementById('history-status').textContent = 'Loading…';
+    destroyAll();
+    document.getElementById('fs-charts').innerHTML =
+      '<div class="disk-no-data">Loading…</div>';
+    document.getElementById('docker-chart-wrap').style.display  = 'none';
+    document.getElementById('docker-unavailable').style.display = 'none';
+
+    const hours     = days * 24;
+    const fsUrl     = `{{ url_for('api.api_disk_history') }}?hours=${hours}`;
+    const dockerUrl = `{{ url_for('api.api_disk_history') }}?docker=1&hours=${hours}`;
+
+    Promise.all([
+      fetch(fsUrl).then(r => r.ok ? r.json() : Promise.reject(r.status)),
+      fetch(dockerUrl).then(r => r.ok ? r.json() : Promise.reject(r.status)),
+    ])
+    .then(([fsData, dockerData]) => {
+      renderFsCharts(fsData.series || {});
+      renderDockerChart(dockerData.points || []);
+      const fsCount     = Object.values(fsData.series || {}).reduce((n, pts) => n + pts.length, 0);
+      const dockerCount = (dockerData.points || []).length;
+      document.getElementById('history-status').textContent =
+        `${fsCount} filesystem samples · ${dockerCount} Docker samples`;
+    })
+    .catch(err => {
+      document.getElementById('fs-charts').innerHTML =
+        `<div class="disk-no-data" style="color:var(--red)">Failed to load history (${err})</div>`;
+      document.getElementById('history-status').textContent = '';
+    });
+  }
+
+  // ---------------------------------------------------------------- range buttons
+  document.querySelectorAll('.range-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('btn-primary'));
+      document.querySelectorAll('.range-btn').forEach(b => b.classList.add('btn-ghost'));
+      btn.classList.remove('btn-ghost');
+      btn.classList.add('btn-primary');
+      load(parseInt(btn.dataset.days, 10));
+    });
+  });
+
+  // ---------------------------------------------------------------- boot — load 7 days by default
+  document.addEventListener('DOMContentLoaded', () => {
+    const defaultBtn = document.querySelector('.range-btn[data-days="7"]');
+    if (defaultBtn) defaultBtn.click();
+  });
+})();
+</script>
+{% endblock %}

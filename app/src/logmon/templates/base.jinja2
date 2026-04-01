@@ -67,6 +67,9 @@
       <a href="{{ url_for('disk.disk_detail') }}" class="nav-link {% if request.endpoint == 'disk.disk_detail' %}active{% endif %}">
         <span class="nav-icon">◫</span> Disk Usage
       </a>
+      <a href="{{ url_for('disk.disk_history') }}" class="nav-link {% if request.endpoint == 'disk.disk_history' %}active{% endif %}">
+        <span class="nav-icon">◱</span> Disk History
+      </a>
     </div>
 
     <div class="sidebar-footer">
