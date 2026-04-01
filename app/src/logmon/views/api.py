@@ -8,7 +8,7 @@ from sqlalchemy import func
 
 from datetime import datetime, timedelta, timezone
 
-from ..access_analysis import get_bad_actors, get_bad_actors_summary, get_cpu_metrics
+from ..access_analysis import get_bad_actors, get_bad_actors_summary, get_cpu_metrics, get_access_rate
 from ..model import db
 from ..model import LogEvent, SnsNotification
 from ..follower import get_all_tails, get_tail
@@ -405,3 +405,43 @@ def api_disk_history():
         "hours":  hours,
         "points": points,
     })
+
+
+# ---------------------------------------------------------------------------
+# JSON API — Access rate (for CPU chart overlay)
+# ---------------------------------------------------------------------------
+
+@bp.route("/access/rate")
+@login_required
+def api_access_rate():
+    """
+    Return per-interval request counts aligned to the CPU sample timestamps.
+
+    Query params: start=, end=  (ISO, same as /access/cpu)
+
+    The caller should first fetch /access/cpu to get the timestamps, then
+    pass those same start/end values here so the intervals line up.
+
+    Response::
+        {
+            "start": "...",
+            "end":   "...",
+            "points": [
+                {"timestamp": "2025-01-01T00:00:00", "req_count": 42},
+                ...
+            ]
+        }
+    """
+    start, end = _parse_window()
+
+    # Fetch CPU points first to get the canonical timestamps
+    cpu_points = get_cpu_metrics(current_app._get_current_object(), start=start, end=end)
+    timestamps = [datetime.fromisoformat(p["timestamp"]) for p in cpu_points]
+
+    points = get_access_rate(
+        current_app._get_current_object(),
+        start=start,
+        end=end,
+        timestamps=timestamps,
+    )
+    return jsonify({"start": start.isoformat(), "end": end.isoformat(), "points": points})

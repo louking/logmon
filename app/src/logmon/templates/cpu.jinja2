@@ -96,6 +96,9 @@ document.querySelectorAll('.quick-range').forEach(btn => {
 // ---------------------------------------------------------------- fetch
 document.getElementById('btn-refresh').addEventListener('click', fetchCpu);
 
+// ---------------------------------------------------------------- fetch
+document.getElementById('btn-refresh').addEventListener('click', fetchCpu);
+
 function fetchCpu() {
   const start = document.getElementById('ctrl-start').value;
   const end   = document.getElementById('ctrl-end').value;
@@ -106,18 +109,22 @@ function fetchCpu() {
   document.getElementById('stat-tiles').style.display = 'none';
   document.getElementById('no-creds-card').style.display = 'none';
 
-  const url = `/api/access/cpu?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
-  fetch(url)
-    .then(r => r.json())
-    .then(data => {
-      const pts = data.points || [];
+  const qs  = `start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
+
+  Promise.all([
+    fetch(`/api/access/cpu?${qs}`).then(r => r.json()),
+    fetch(`/api/access/rate?${qs}`).then(r => r.json()),
+  ])
+    .then(([cpuData, rateData]) => {
+      const pts  = cpuData.points  || [];
+      const rate = rateData.points || [];
       if (!pts.length) {
         document.getElementById('cpu-loading').textContent = 'No data returned for this window.';
         document.getElementById('no-creds-card').style.display = '';
         return;
       }
       document.getElementById('cpu-loading').style.display = 'none';
-      renderChart(pts);
+      renderChart(pts, rate);
       renderStats(pts);
     })
     .catch(err => {
@@ -126,15 +133,11 @@ function fetchCpu() {
 }
 
 // ---------------------------------------------------------------- chart
-function renderChart(pts) {
-  // Full Date objects kept in closure so tick callback and tooltip can both use them.
-  const dates  = pts.map(p => new Date(p.timestamp));
-  const values = pts.map(p => p.cpu_pct);
-
-  // Simple numeric labels (0..n-1); the tick callback does all the formatting.
-  // This gives us reliable access to the *actual* index Chart.js chose to display,
-  // avoiding the problem of Chart.js skipping the specially-labelled day-rollover ticks.
-  const labels = dates.map((_, i) => i);
+function renderChart(pts, ratePts) {
+  const dates    = pts.map(p => new Date(p.timestamp));
+  const cpuVals  = pts.map(p => p.cpu_pct);
+  const rateVals = (ratePts || []).map(p => p.req_count);
+  const labels   = dates.map((_, i) => i);
 
   const spanDays = dates.length > 1
     && dates[0].toLocaleDateString() !== dates[dates.length - 1].toLocaleDateString();
@@ -144,6 +147,7 @@ function renderChart(pts) {
 
   const bg     = getComputedStyle(document.documentElement).getPropertyValue('--bg3').trim()  || '#1a1a2e';
   const accent = getComputedStyle(document.documentElement).getPropertyValue('--blue').trim() || '#4a90e2';
+  const green  = getComputedStyle(document.documentElement).getPropertyValue('--green').trim() || '#4caf50';
   const text   = getComputedStyle(document.documentElement).getPropertyValue('--text').trim() || '#ccc';
 
   if (_chart) _chart.destroy();
@@ -152,28 +156,35 @@ function renderChart(pts) {
     type: 'line',
     data: {
       labels,
-      datasets: [{
-        label: 'CPU %',
-        data: values,
-        borderColor: accent,
-        backgroundColor: accent + '22',
-        borderWidth: 1.5,
-        pointRadius: pts.length > 200 ? 0 : 2,
-        fill: true,
-        tension: 0.3,
-      }],
+      datasets: [
+        {
+          label: 'CPU %',
+          data: cpuVals,
+          borderColor: accent,
+          backgroundColor: accent + '22',
+          borderWidth: 1.5,
+          pointRadius: pts.length > 200 ? 0 : 2,
+          fill: true,
+          tension: 0.3,
+          yAxisID: 'yCpu',
+        },
+        {
+          label: 'Requests',
+          data: rateVals,
+          borderColor: green,
+          backgroundColor: green + '18',
+          borderWidth: 1.5,
+          pointRadius: pts.length > 200 ? 0 : 2,
+          fill: true,
+          tension: 0.3,
+          yAxisID: 'yReq',
+        },
+      ],
     },
     options: {
       responsive: true,
       animation: false,
-      // index mode: tooltip fires for the nearest x position regardless of
-      // where on the y-axis the cursor is; intersect:false means you don't
-      // need to hover over the line itself.
-      interaction: {
-        mode: 'index',
-        axis: 'x',
-        intersect: false,
-      },
+      interaction: { mode: 'index', axis: 'x', intersect: false },
       scales: {
         x: {
           ticks: {
@@ -182,36 +193,45 @@ function renderChart(pts) {
             font: { size: 10 },
             minRotation: spanDays ? 30 : 0,
             maxRotation: spanDays ? 45 : 0,
-            // callback receives the tick value (= the numeric index we set as label)
             callback(val) {
               const idx = Math.round(val);
               if (idx < 0 || idx >= dates.length) return '';
               const d    = dates[idx];
               const time = d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', hour12: false});
               if (!spanDays) return time;
-              // On multi-day windows Chart.js freely skips ticks, so we can't
-              // reliably detect rollovers by comparing to dates[idx-1] (the
-              // previous *data point*, not the previous *displayed tick*).
-              // Simplest correct solution: always show the date on every tick.
               const day = d.toLocaleDateString([], {month: 'short', day: 'numeric'});
               return [day, time];
             },
           },
           grid: { color: bg },
         },
-        y: {
+        yCpu: {
+          type: 'linear',
+          position: 'left',
           min: 0,
           max: 100,
           ticks: {
-            color: text,
+            color: accent,
             callback: v => v + '%',
             font: { size: 10 },
           },
           grid: { color: bg },
+          title: { display: true, text: 'CPU %', color: accent, font: { size: 10 } },
+        },
+        yReq: {
+          type: 'linear',
+          position: 'right',
+          min: 0,
+          ticks: {
+            color: green,
+            font: { size: 10 },
+          },
+          grid: { drawOnChartArea: false },   // no grid lines for the right axis
+          title: { display: true, text: 'Requests / interval', color: green, font: { size: 10 } },
         },
       },
       plugins: {
-        legend: { display: false },
+        legend: { display: true, labels: { color: text, font: { size: 11 } } },
         tooltip: {
           callbacks: {
             title: items => {
@@ -222,7 +242,9 @@ function renderChart(pts) {
                 hour12: false,
               });
             },
-            label: ctx => ` CPU: ${ctx.parsed.y.toFixed(1)}%`,
+            label: ctx => ctx.dataset.yAxisID === 'yCpu'
+              ? ` CPU: ${ctx.parsed.y.toFixed(1)}%`
+              : ` Requests: ${ctx.parsed.y}`,
           },
         },
       },

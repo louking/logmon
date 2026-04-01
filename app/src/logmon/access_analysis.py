@@ -15,11 +15,12 @@ import logging
 import threading
 from bisect import bisect_right
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from io import BytesIO
 from ipaddress import IPv4Network, ip_address
 from tarfile import TarFile
 from typing import TYPE_CHECKING
+from sqlalchemy import func
 
 from requests import get as http_get
 from requests.exceptions import RequestException
@@ -422,3 +423,74 @@ def get_cpu_metrics(
             continue
 
     return points
+
+# ---------------------------------------------------------------------------
+# access rate — retrieves AccessEvent counts bucketed by minute, aligned to CPU timestamps
+# ---------------------------------------------------------------------------
+
+def get_access_rate(flask_app, start: datetime, end: datetime, timestamps: list[datetime]) -> list[dict]:
+    """
+    Count AccessEvent rows bucketed by minute, then align to CPU timestamps.
+
+    Each CPU sample is assigned the maximum per-minute request count across
+    all minute buckets that fall within its CPU interval:
+
+    - Sub-minute CPU sampling: interval covers exactly one minute bucket,
+      so adjacent samples share the same value (honest flat steps).
+    - Super-minute CPU sampling: takes the peak minute within the wider
+      interval, avoiding under-reporting during bursty traffic.
+
+    Returns a list of {"timestamp": iso, "req_count": int} parallel to
+    `timestamps`.
+    """
+    if not timestamps:
+        return []
+
+    from .model import db, AccessEvent
+
+    # Infer CPU sample interval; fall back to 60 s if only one sample.
+    if len(timestamps) > 1:
+        interval_secs = int((timestamps[1] - timestamps[0]).total_seconds())
+    else:
+        interval_secs = 60
+
+    with flask_app.app_context():
+        bucket_expr = func.from_unixtime(
+            (func.unix_timestamp(AccessEvent.occurred_at) / 60).op('DIV')(1) * 60
+        )
+
+        rows = (
+            db.session.query(
+                bucket_expr.label("bucket"),
+                func.count(AccessEvent.id).label("req_count"),
+            )
+            .filter(AccessEvent.occurred_at >= start, AccessEvent.occurred_at < end)
+            .group_by("bucket")
+            .order_by("bucket")
+            .all()
+        )
+
+        count_by_minute: dict[datetime, int] = {}
+        for bucket_dt, count in rows:
+            if isinstance(bucket_dt, str):
+                bucket_dt = datetime.fromisoformat(bucket_dt)
+            count_by_minute[bucket_dt] = count
+
+    def _floor_to_minute(dt: datetime) -> datetime:
+        return dt.replace(second=0, microsecond=0)
+
+    def _max_in_window(ts: datetime) -> int:
+        """Max per-minute count across all minutes within the CPU interval."""
+        window_start = _floor_to_minute(ts)
+        n_minutes = max(1, interval_secs // 60)
+        return max(
+            count_by_minute.get(
+                window_start + timedelta(minutes=i), 0
+            )
+            for i in range(n_minutes)
+        )
+
+    return [
+        {"timestamp": ts.isoformat(), "req_count": _max_in_window(ts)}
+        for ts in timestamps
+    ]
