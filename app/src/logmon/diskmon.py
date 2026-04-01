@@ -332,6 +332,11 @@ def _collect_df(exclude_mounts: list[str] | None = None) -> list[dict]:
             if device.startswith("/dev/loop"):
                 continue
 
+            # Skip Docker overlay2 layer merged views that appear under /host/
+            # when the host's Docker data directory is bind-mounted.
+            if "/overlay2/" in mount:
+                continue            # Pseudo fstypes via /proc/mounts.
+            
             # Pseudo fstypes via /proc/mounts.
             fstype = _get_fstype(mount)
             if fstype and fstype.lower() in _DF_EXCLUDE:
@@ -535,8 +540,8 @@ def _parse_docker_df_verbose(text: str) -> dict:
                 "size":  parts[2],
             })
 
+    volumes.sort(key=lambda v: _parse_size(v["size"]), reverse=True)
     return {"images": images, "volumes": volumes}
-
 
 def _parse_size(s: str) -> int:
     """
