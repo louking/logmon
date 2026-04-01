@@ -18,15 +18,26 @@
   </div>
 </div>
 
-<!-- Filesystem charts -->
-<div class="disk-section-heading">Filesystem Usage Over Time</div>
-<div id="fs-charts">
-  <div class="disk-no-data">Select a time range above.</div>
+<!-- Filesystem combined chart + checklist -->
+<div class="disk-section-heading">Filesystem Usage % Over Time</div>
+<div class="card gap" id="fs-chart-card" style="display:none;">
+  <div class="card-body" style="padding:14px 18px;">
+    <!-- Mount checklist -->
+    <div id="mount-checklist" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;"></div>
+    <!-- Chart -->
+    <div style="position:relative;min-height:260px;">
+      <canvas id="fs-chart"></canvas>
+    </div>
+  </div>
+</div>
+<div id="fs-loading" class="disk-no-data">Select a time range above.</div>
+<div id="fs-unavailable" class="disk-no-data" style="display:none;">
+  No filesystem history available for this window.
 </div>
 
 <!-- Docker chart -->
 <div class="disk-section-heading" style="margin-top:32px;">Docker Usage Over Time</div>
-<div id="docker-chart-wrap" class="card gap" style="display:none;">
+<div class="card gap" id="docker-chart-wrap" style="display:none;">
   <div class="card-header">Docker component sizes</div>
   <div class="card-body" style="padding:14px 18px;position:relative;min-height:220px;">
     <canvas id="docker-chart"></canvas>
@@ -44,6 +55,9 @@
   "use strict";
 
   const THRESHOLD_PCT = {{ threshold_pct | default(85) }};
+
+  // Colour palette for filesystem series — cycles if more mounts than entries
+  const FS_PALETTE = ['--accent', '--green', '--cyan', '--purple', '--orange', '--yellow'];
 
   // ---------------------------------------------------------------- css vars
   function cv(name) {
@@ -80,22 +94,16 @@
     const d    = new Date(dates[idx]);
     const time = d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', hour12: false});
     if (!spanDays) return time;
-    const day  = d.toLocaleDateString([], {month: 'short', day: 'numeric'});
-    return [day, time];
+    return [d.toLocaleDateString([], {month: 'short', day: 'numeric'}), time];
   }
 
-  function lineColor(pct) {
-    if (pct >= THRESHOLD_PCT)      return cv('--red');
-    if (pct >= THRESHOLD_PCT - 10) return cv('--yellow');
-    return cv('--green');
-  }
-
-  // ---------------------------------------------------------------- chart registry
-  const _charts = {};
+  // ---------------------------------------------------------------- chart instances
+  let _fsChart     = null;
+  let _dockerChart = null;
 
   function destroyAll() {
-    Object.values(_charts).forEach(ch => ch.destroy());
-    Object.keys(_charts).forEach(k => delete _charts[k]);
+    if (_fsChart)     { _fsChart.destroy();     _fsChart     = null; }
+    if (_dockerChart) { _dockerChart.destroy();  _dockerChart = null; }
   }
 
   // ---------------------------------------------------------------- base chart options
@@ -116,7 +124,7 @@
             font:          { size: 10 },
             minRotation:   spanDays ? 30 : 0,
             maxRotation:   spanDays ? 45 : 0,
-            callback(val) { return tickLabel(dates, Math.round(val), spanDays); },
+            callback(val)  { return tickLabel(dates, Math.round(val), spanDays); },
           },
           grid: { color: cv('--border') },
         },
@@ -136,89 +144,110 @@
           borderWidth:     1,
           callbacks: {
             title: items => fmtTs(dates[items[0].dataIndex]),
-            label: ctx  => ' ' + ctx.dataset.label + ': ' + yFmt(ctx.parsed.y),
+            label: ctx   => ' ' + ctx.dataset.label + ': ' + yFmt(ctx.parsed.y),
           },
         },
       },
     };
   }
 
-  // ---------------------------------------------------------------- render filesystem charts
-  function renderFsCharts(series) {
-    const wrap   = document.getElementById('fs-charts');
-    const mounts = Object.keys(series).sort();
+  // ---------------------------------------------------------------- state
+  // allSeries: { mount: [{collected_at, use_pct, used_kb, total_kb}, ...] }
+  let allSeries     = {};
+  let checkedMounts = new Set();
+  // mount → palette index (stable across checklist changes)
+  let mountColors   = {};
 
-    if (mounts.length === 0) {
-      wrap.innerHTML = '<div class="disk-no-data">No filesystem history available for this window.</div>';
-      return;
+  // ---------------------------------------------------------------- build/update filesystem chart
+  function buildFsChart() {
+    const mounts = [...checkedMounts].sort();
+
+    // Use the longest series as the x-axis reference so all points are covered
+    const refMount = Object.keys(allSeries).sort(
+      (a, b) => (allSeries[b] || []).length - (allSeries[a] || []).length
+    )[0];
+    const dates = refMount ? (allSeries[refMount] || []).map(p => p.collected_at) : [];
+
+    if (!dates.length) return;
+
+    const datasets = mounts.map(mount => {
+      const colorVar = FS_PALETTE[mountColors[mount] % FS_PALETTE.length];
+      const color    = cv(colorVar);
+      const points   = allSeries[mount] || [];
+      return {
+        label:           mount,
+        data:            points.map(p => p.use_pct),
+        borderColor:     color,
+        backgroundColor: color + '22',
+        borderWidth:     1.5,
+        pointRadius:     points.length > 300 ? 0 : 2,
+        fill:            false,
+        tension:         0.2,
+      };
+    });
+
+    // Dashed threshold line
+    datasets.push({
+      label:       'Threshold (' + THRESHOLD_PCT + '%)',
+      data:        dates.map(() => THRESHOLD_PCT),
+      borderColor: cv('--red') + '88',
+      borderWidth: 1,
+      borderDash:  [4, 4],
+      pointRadius: 0,
+      fill:        false,
+    });
+
+    const opts       = baseOptions(dates, 'Use %', v => v + '%');
+    opts.scales.y.min = 0;
+    opts.scales.y.max = 100;
+
+    if (_fsChart) {
+      _fsChart.data.labels   = dates.map((_, i) => i);
+      _fsChart.data.datasets = datasets;
+      _fsChart.update('none');
+    } else {
+      _fsChart = new Chart(
+        document.getElementById('fs-chart').getContext('2d'),
+        { type: 'line', data: { labels: dates.map((_, i) => i), datasets }, options: opts }
+      );
     }
+  }
 
+  // ---------------------------------------------------------------- render checklist
+  function renderChecklist(mounts) {
+    const wrap = document.getElementById('mount-checklist');
     wrap.innerHTML = '';
 
     mounts.forEach(mount => {
-      const points   = series[mount];
-      const dates    = points.map(p => p.collected_at);
-      const useData  = points.map(p => p.use_pct);
-      const lastPct  = useData.length ? useData[useData.length - 1] : 0;
-      const color    = lineColor(lastPct);
-      const safeId   = 'chart-' + mount.replace(/[^a-z0-9]/gi, '-');
+      const colorVar = FS_PALETTE[mountColors[mount] % FS_PALETTE.length];
+      const color    = cv(colorVar);
+      const checked  = checkedMounts.has(mount);
 
-      // stat summary for card header
-      let statText = '';
-      if (points.length) {
-        const last = points[points.length - 1];
-        statText = `current ${last.use_pct}%  ·  ${fmtKb(last.used_kb)} / ${fmtKb(last.total_kb)}`;
-      }
+      const pill = document.createElement('button');
+      pill.className         = 'btn btn-ghost';
+      pill.dataset.mount     = mount;
+      pill.style.cssText     = `
+        font-size:11px;padding:3px 10px;
+        border-color:${color}66;
+        display:inline-flex;align-items:center;gap:5px;
+        ${checked ? `background:${color}22;color:${cv('--text')};` : `color:${cv('--text-muted')};`}
+      `;
+      pill.innerHTML = `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${color};flex-shrink:0;"></span>${mount}`;
 
-      const card = document.createElement('div');
-      card.className = 'card gap';
-      card.innerHTML = `
-        <div class="card-header">
-          <code style="font-size:11px;">${mount}</code>
-          <span style="font-size:11px;color:var(--text-muted);">${statText}</span>
-        </div>
-        <div class="card-body" style="padding:14px 18px;position:relative;min-height:180px;">
-          <canvas id="${safeId}"></canvas>
-        </div>`;
-      wrap.appendChild(card);
-
-      const opts       = baseOptions(dates, 'Use %', v => v + '%');
-      opts.scales.y.min = 0;
-      opts.scales.y.max = 100;
-      opts.plugins.legend.display = false;
-
-      // override tooltip label since legend is hidden
-      opts.plugins.tooltip.callbacks.label = ctx => ` ${ctx.parsed.y}%`;
-
-      const ctx = card.querySelector(`#${safeId}`).getContext('2d');
-      _charts[mount] = new Chart(ctx, {
-        type: 'line',
-        data: {
-          labels: dates.map((_, i) => i),
-          datasets: [
-            {
-              label:           mount,
-              data:            useData,
-              borderColor:     color,
-              backgroundColor: color + '22',
-              borderWidth:     1.5,
-              pointRadius:     points.length > 300 ? 0 : 2,
-              fill:            true,
-              tension:         0.2,
-            },
-            {
-              label:       'threshold',
-              data:        dates.map(() => THRESHOLD_PCT),
-              borderColor: cv('--red') + '66',
-              borderWidth: 1,
-              borderDash:  [4, 4],
-              pointRadius: 0,
-              fill:        false,
-            },
-          ],
-        },
-        options: opts,
+      pill.addEventListener('click', () => {
+        if (checkedMounts.has(mount)) {
+          checkedMounts.delete(mount);
+          pill.style.background = 'transparent';
+          pill.style.color      = cv('--text-muted');
+        } else {
+          checkedMounts.add(mount);
+          pill.style.background = color + '22';
+          pill.style.color      = cv('--text');
+        }
+        buildFsChart();
       });
+
+      wrap.appendChild(pill);
     });
   }
 
@@ -236,10 +265,10 @@
     const dates = points.map(p => p.collected_at);
 
     const datasets = [
-      { label: 'Images',      key: 'images_size_bytes',      color: '--accent'  },
-      { label: 'Volumes',     key: 'volumes_size_bytes',      color: '--green'   },
-      { label: 'Build cache', key: 'build_cache_size_bytes',  color: '--yellow'  },
-      { label: 'Containers',  key: 'containers_size_bytes',   color: '--purple'  },
+      { label: 'Images',      key: 'images_size_bytes',     color: '--accent'  },
+      { label: 'Volumes',     key: 'volumes_size_bytes',     color: '--green'   },
+      { label: 'Build cache', key: 'build_cache_size_bytes', color: '--yellow'  },
+      { label: 'Containers',  key: 'containers_size_bytes',  color: '--purple'  },
     ].map(ds => ({
       label:           ds.label,
       data:            points.map(p => p[ds.key] || 0),
@@ -253,22 +282,22 @@
 
     const opts = baseOptions(dates, 'Size', fmtBytes);
 
-    const ctx = document.getElementById('docker-chart').getContext('2d');
-    _charts['__docker__'] = new Chart(ctx, {
-      type: 'line',
-      data: { labels: dates.map((_, i) => i), datasets },
-      options: opts,
-    });
+    if (_dockerChart) { _dockerChart.destroy(); _dockerChart = null; }
+    _dockerChart = new Chart(
+      document.getElementById('docker-chart').getContext('2d'),
+      { type: 'line', data: { labels: dates.map((_, i) => i), datasets }, options: opts }
+    );
   }
 
   // ---------------------------------------------------------------- load
   function load(days) {
-    document.getElementById('history-status').textContent = 'Loading…';
+    document.getElementById('history-status').textContent      = 'Loading…';
+    document.getElementById('fs-loading').style.display        = '';
+    document.getElementById('fs-chart-card').style.display     = 'none';
+    document.getElementById('fs-unavailable').style.display    = 'none';
+    document.getElementById('docker-chart-wrap').style.display = 'none';
+    document.getElementById('docker-unavailable').style.display= 'none';
     destroyAll();
-    document.getElementById('fs-charts').innerHTML =
-      '<div class="disk-no-data">Loading…</div>';
-    document.getElementById('docker-chart-wrap').style.display  = 'none';
-    document.getElementById('docker-unavailable').style.display = 'none';
 
     const hours     = days * 24;
     const fsUrl     = `{{ url_for('api.api_disk_history') }}?hours=${hours}`;
@@ -279,35 +308,56 @@
       fetch(dockerUrl).then(r => r.ok ? r.json() : Promise.reject(r.status)),
     ])
     .then(([fsData, dockerData]) => {
-      renderFsCharts(fsData.series || {});
+      document.getElementById('fs-loading').style.display = 'none';
+
+      allSeries = fsData.series || {};
+      const mounts = Object.keys(allSeries).sort();
+
+      if (mounts.length === 0) {
+        document.getElementById('fs-unavailable').style.display = '';
+      } else {
+        // Assign stable colour indices
+        mountColors = {};
+        mounts.forEach((m, i) => { mountColors[m] = i; });
+        // Default: all mounts selected
+        checkedMounts = new Set(mounts);
+        renderChecklist(mounts);
+        document.getElementById('fs-chart-card').style.display = '';
+        buildFsChart();
+      }
+
       renderDockerChart(dockerData.points || []);
-      const fsCount     = Object.values(fsData.series || {}).reduce((n, pts) => n + pts.length, 0);
+
+      const fsCount     = Object.values(allSeries).reduce((n, pts) => n + pts.length, 0);
       const dockerCount = (dockerData.points || []).length;
       document.getElementById('history-status').textContent =
         `${fsCount} filesystem samples · ${dockerCount} Docker samples`;
     })
     .catch(err => {
-      document.getElementById('fs-charts').innerHTML =
-        `<div class="disk-no-data" style="color:var(--red)">Failed to load history (${err})</div>`;
-      document.getElementById('history-status').textContent = '';
+      document.getElementById('fs-loading').style.display        = 'none';
+      document.getElementById('fs-unavailable').style.display    = '';
+      document.getElementById('fs-unavailable').style.color      = cv('--red');
+      document.getElementById('fs-unavailable').textContent      = `Failed to load history (${err})`;
+      document.getElementById('history-status').textContent      = '';
     });
   }
 
   // ---------------------------------------------------------------- range buttons
   document.querySelectorAll('.range-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('btn-primary'));
-      document.querySelectorAll('.range-btn').forEach(b => b.classList.add('btn-ghost'));
+      document.querySelectorAll('.range-btn').forEach(b => {
+        b.classList.remove('btn-primary');
+        b.classList.add('btn-ghost');
+      });
       btn.classList.remove('btn-ghost');
       btn.classList.add('btn-primary');
       load(parseInt(btn.dataset.days, 10));
     });
   });
 
-  // ---------------------------------------------------------------- boot — load 7 days by default
+  // ---------------------------------------------------------------- boot
   document.addEventListener('DOMContentLoaded', () => {
-    const defaultBtn = document.querySelector('.range-btn[data-days="7"]');
-    if (defaultBtn) defaultBtn.click();
+    document.querySelector('.range-btn[data-days="7"]').click();
   });
 })();
 </script>
