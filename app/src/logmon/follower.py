@@ -122,6 +122,7 @@ class FileFollower(threading.Thread):
         self.flask_app = flask_app
         self._stop_event = threading.Event()
         self._tail_maxlen = flask_app.config.get("LOG_TAIL_LINES", 500)
+        self.inode: int | None = None   # set after open; used for rotation detection
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -133,6 +134,7 @@ class FileFollower(threading.Thread):
         )
         try:
             with open(self.filepath, errors="replace") as fh:
+                self.inode = os.fstat(fh.fileno()).st_ino
                 fh.seek(0, 2)   # jump to end of file
                 if self.parser == "app":
                     self._run_app(fh)
@@ -156,7 +158,12 @@ class FileFollower(threading.Thread):
 
             if not line:
                 if pending and tb_lines:
-                    self._commit_app(pending, tb_lines)
+                    try:
+                        self._commit_app(pending, tb_lines)
+                    except Exception:
+                        log.exception(
+                            "Failed to persist traceback event for %s", self.app_name
+                        )
                     pending, tb_lines = None, []
                 time.sleep(0.25)
                 continue
@@ -168,7 +175,12 @@ class FileFollower(threading.Thread):
                 if not is_new_app_record(line):
                     tb_lines.append(line)
                     continue
-                self._commit_app(pending, tb_lines)
+                try:
+                    self._commit_app(pending, tb_lines)
+                except Exception:
+                    log.exception(
+                        "Failed to persist traceback event for %s", self.app_name
+                    )
                 pending, tb_lines = None, []
 
             parsed = parse_app_line(line)
@@ -181,7 +193,12 @@ class FileFollower(threading.Thread):
                 pending = parsed
             elif parsed["level"] == "ERROR":
                 # Single-line ERROR with no traceback; persist immediately.
-                self._persist_app_event(parsed, "")
+                try:
+                    self._persist_app_event(parsed, "")
+                except Exception:
+                    log.exception(
+                        "Failed to persist error event for %s", self.app_name
+                    )
 
     # -------------------------------------------------------- access log loop
 
@@ -359,6 +376,19 @@ class FollowerManager(threading.Thread):
         if not os.path.exists(filepath):
             return   # not present yet; picked up on next scan
         follower = self._followers.get(filepath)
+        if follower is not None and follower.is_alive():
+            # Detect log rotation: if the path now points to a different inode,
+            # the file was rotated — stop the stale follower so a new one starts.
+            try:
+                if follower.inode is not None and os.stat(filepath).st_ino != follower.inode:
+                    log.info(
+                        "Log rotation detected for %s (inode changed), restarting follower",
+                        filepath,
+                    )
+                    follower.stop()
+                    follower = None
+            except OSError:
+                pass
         if follower is None or not follower.is_alive():
             log.info("(Re)starting %s follower for %s", parser, filepath)
             f = FileFollower(entry.name, filepath, parser, entry, self.flask_app)

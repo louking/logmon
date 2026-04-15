@@ -172,9 +172,21 @@ def is_new_app_record(line: str) -> bool:
     return bool(RE_APP_GENERIC.match(line.rstrip("\n")))
 
 
+_EXC_LINE_RE = re.compile(r"^\w[\w.]*:\s")
+
+
 def extract_exception_type(traceback_text: str) -> str | None:
-    """Return the final non-blank line of a traceback (the exception class+msg)."""
+    """Return the exception class line from a traceback.
+
+    Prefers the last line that looks like a Python exception declaration
+    (e.g. ``sqlalchemy.exc.DataError: ...`` or ``ValueError: ...``),
+    skipping loutilities/Flask suffixes like ``[in file:line]``.
+    Falls back to the absolute last non-blank line.
+    """
     lines = [l.rstrip() for l in traceback_text.splitlines() if l.strip()]
+    for line in reversed(lines):
+        if _EXC_LINE_RE.match(line):
+            return line
     return lines[-1] if lines else None
 
 
