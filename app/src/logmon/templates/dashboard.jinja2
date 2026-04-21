@@ -207,13 +207,16 @@ function refreshBadActors() {
       const threshold = data.threshold;
       const hours     = data.hours;
 
-      const rows = actors.slice(0, 5).map(a =>
-        `<div style="display:flex;gap:16px;align-items:center;margin-bottom:4px;font-size:12px;">
+      const rows = actors.slice(0, 5).map(a => {
+        const errPart = a.error_count
+          ? ` <span style="color:var(--yellow);">(${a.error_count.toLocaleString()} 4xx/5xx)</span>`
+          : '';
+        return `<div style="display:flex;gap:16px;align-items:center;margin-bottom:4px;font-size:12px;">
            <span style="font-family:monospace;min-width:120px;">${a.ip}</span>
            <span class="badge badge-grey">${a.country}</span>
-           <span style="color:var(--red);">${a.count.toLocaleString()} req</span>
-         </div>`
-      ).join('');
+           <span style="color:var(--red);">${a.count.toLocaleString()} req</span>${errPart}
+         </div>`;
+      }).join('');
 
       const more = actors.length > 5
         ? `<div class="text-muted" style="font-size:11px;margin-top:6px;">…and ${actors.length - 5} more above ${threshold.toLocaleString()} requests in ${hours}h</div>`

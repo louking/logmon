@@ -340,6 +340,9 @@ def get_bad_actors_summary(threshold: int, hours: int = 24, flask_app=None) -> l
         db.session.query(
             AccessEvent.client_ip,
             func.count(AccessEvent.id).label("count"),
+            func.sum(
+                db.case((AccessEvent.status_code >= 400, 1), else_=0)
+            ).label("error_count"),
         )
         .filter(
             AccessEvent.occurred_at >= start,
@@ -358,6 +361,7 @@ def get_bad_actors_summary(threshold: int, hours: int = 24, flask_app=None) -> l
         {
             "ip": r.client_ip or "",
             "count": int(r.count),
+            "error_count": int(r.error_count or 0),
             "country": mapper.get_country_from_ip(r.client_ip or ""),
         }
         for r in rows
