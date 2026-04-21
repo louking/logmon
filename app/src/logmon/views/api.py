@@ -107,10 +107,12 @@ def recent_errors():
 @bp.route("/sns/recent")
 @login_required
 def sns_recent():
+    days = request.args.get("days", 7, type=int)
+    since = datetime.now() - timedelta(days=days)
     items = (
         SnsNotification.query
+        .filter(SnsNotification.received_at >= since)
         .order_by(SnsNotification.received_at.desc())
-        .limit(request.args.get("n", 10, type=int))
         .all()
     )
     return jsonify([i.to_dict() for i in items])

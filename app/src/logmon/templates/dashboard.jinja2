@@ -19,7 +19,7 @@
   <div class="stat-tile yellow">
     <div class="stat-label">SNS notifications</div>
     <div class="stat-value" id="stat-sns">–</div>
-    <div class="stat-sub">recent</div>
+    <div class="stat-sub">past 7 days</div>
   </div>
   <div class="stat-tile green">
     <div class="stat-label">Status</div>
@@ -175,7 +175,7 @@ function refreshErrors() {
 
 // ---------------------------------------------------------------- recent SNS
 function refreshSns() {
-  fetch('/api/sns/recent?n=10')
+  fetch('/api/sns/recent?days=7')
     .then(r => r.json())
     .then(items => {
       const tbody = document.getElementById('recent-sns-body');
