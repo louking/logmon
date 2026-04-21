@@ -169,7 +169,10 @@ function renderTable() {
   tbody.innerHTML = sorted.map(a => {
     const chk = _selected.has(a.ip) ? 'checked' : '';
     const paths = (a.paths || []).map(p =>
-      `<code style="font-size:10px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:300px;">${p}</code>`
+      `<div style="display:flex;gap:6px;align-items:baseline;">
+         <span class="badge badge-grey" style="font-size:9px;flex-shrink:0;">${p.app}</span>
+         <code style="font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px;">${p.path}</code>
+       </div>`
     ).join('');
     const errPct = a.count ? Math.round(a.error_count / a.count * 100) : 0;
     const errColor = errPct > 50 ? 'var(--red)' : errPct > 20 ? 'var(--yellow)' : '';

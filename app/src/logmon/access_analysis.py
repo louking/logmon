@@ -288,9 +288,10 @@ def get_bad_actors(
         if threshold and count < threshold:
             break        # rows are ordered by count desc, so we can stop early
 
-        # top paths for this IP
+        # top paths for this IP, with the app each path belongs to
         path_rows = (
             db.session.query(
+                AccessEvent.app_name,
                 AccessEvent.path,
                 func.count(AccessEvent.id).label("n"),
             )
@@ -299,7 +300,7 @@ def get_bad_actors(
                 AccessEvent.occurred_at <= end,
                 AccessEvent.client_ip == ip,
             )
-            .group_by(AccessEvent.path)
+            .group_by(AccessEvent.app_name, AccessEvent.path)
             .order_by(func.count(AccessEvent.id).desc())
             .limit(5)
             .all()
@@ -311,7 +312,10 @@ def get_bad_actors(
                 "count": count,
                 "error_count": int(row.error_count or 0),
                 "country": mapper.get_country_from_ip(ip),
-                "paths": [r.path for r in path_rows if r.path],
+                "paths": [
+                    {"app": r.app_name, "path": r.path}
+                    for r in path_rows if r.path
+                ],
             }
         )
         if len(result) >= limit:
