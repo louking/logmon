@@ -54,6 +54,19 @@
   </div>
 </div>
 
+<div class="card mb-3" id="mem-tile">
+  <div class="card-header">
+    <span>Memory &amp; Swap</span>
+    <a href="{{ url_for('mem.mem_history') }}" class="btn btn-ghost" style="font-size:11px;padding:3px 10px;">History →</a>
+  </div>
+  <div class="card-body" id="mem-tile-body">
+    <div style="color:var(--text-dim);text-align:center;">Loading…</div>
+  </div>
+  <div style="padding:6px 18px 8px;border-top:1px solid var(--border);">
+    <span class="disk-collected-at" id="mem-tile-collected-at"></span>
+  </div>
+</div>
+
 <!-- Per-app error bar -->
 <div class="gap">
   <div class="card">
@@ -328,6 +341,84 @@ setInterval(refreshAll, 30000);
 
   document.addEventListener("DOMContentLoaded", load);
   setInterval(load, 60000);
+})();
+
+(function () {
+  "use strict";
+
+  const SWAP_THRESHOLD_PCT = {{ swap_threshold_pct | default(50) }};
+
+  function fmtKb(kb) {
+    if (kb >= 1048576) return (kb / 1048576).toFixed(1) + " GB";
+    if (kb >= 1024)    return (kb / 1024).toFixed(1) + " MB";
+    return kb + " KB";
+  }
+
+  function barClass(pct, threshold) {
+    if (pct >= threshold)      return "danger";
+    if (pct >= threshold - 15) return "warn";
+    return "ok";
+  }
+
+  function renderMemTile(data) {
+    const body  = document.getElementById("mem-tile-body");
+    const lines = [];
+
+    const mem = data.mem || {};
+    if (mem.total_kb) {
+      lines.push(`
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:7px;">
+          <code style="min-width:9rem;font-size:11px;color:var(--text-muted);">RAM</code>
+          <div class="disk-bar-wrap" style="flex:1;">
+            <div class="disk-bar-fill ok" style="width:${mem.pct}%"></div>
+          </div>
+          <span style="min-width:6rem;text-align:right;font-size:11px;color:var(--text-muted);">
+            ${fmtKb(mem.used_kb)} / ${fmtKb(mem.total_kb)}
+          </span>
+          <span style="min-width:2.5rem;text-align:right;font-size:11px;">${mem.pct}%</span>
+        </div>`);
+    }
+
+    const swap = data.swap || {};
+    if (swap.total_kb > 0) {
+      const cls   = barClass(swap.pct, SWAP_THRESHOLD_PCT);
+      const alert = swap.pct >= SWAP_THRESHOLD_PCT
+        ? `<span class="disk-alert-badge">⚠</span>` : "";
+      lines.push(`
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:7px;">
+          <code style="min-width:9rem;font-size:11px;color:var(--text-muted);">Swap</code>
+          <div class="disk-bar-wrap" style="flex:1;">
+            <div class="disk-bar-fill ${cls}" style="width:${swap.pct}%"></div>
+          </div>
+          <span style="min-width:6rem;text-align:right;font-size:11px;color:var(--text-muted);">
+            ${fmtKb(swap.used_kb)} / ${fmtKb(swap.total_kb)}
+          </span>
+          <span style="min-width:2.5rem;text-align:right;font-size:11px;">${swap.pct}%${alert}</span>
+        </div>`);
+    } else if (swap.total_kb === 0) {
+      lines.push(`<div style="font-size:11px;color:var(--text-dim);">No swap configured</div>`);
+    }
+
+    body.innerHTML = lines.length
+      ? lines.join("")
+      : '<div style="color:var(--text-dim);text-align:center;">No data yet</div>';
+
+    const ts = document.getElementById("mem-tile-collected-at");
+    if (data.collected_at) ts.textContent = "updated " + data.collected_at;
+  }
+
+  function loadMem() {
+    fetch("{{ url_for('api.api_mem_summary') }}")
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(renderMemTile)
+      .catch(err => {
+        document.getElementById("mem-tile-body").innerHTML =
+          `<div style="color:var(--red);text-align:center;">Memory data unavailable (${err})</div>`;
+      });
+  }
+
+  document.addEventListener("DOMContentLoaded", loadMem);
+  setInterval(loadMem, 60000);
 })();
 </script>
 {% endblock %}

@@ -3,8 +3,9 @@
 A Flask application that tails logs from multiple Flask apps in a Docker
 Compose stack, displays them in a dashboard, and emails alerts when new
 exception types appear. Access logs (nginx or Apache Combined Log Format) are also tailed and stored
-for traffic/firewall analysis. SNS/SES notifications are received via webhook
-and shown alongside the log events.
+for traffic/firewall analysis. Disk usage, memory, and swap are monitored with
+alert emails when thresholds are exceeded. SNS/SES notifications are received
+via webhook and shown alongside the log events.
 
 ---
 
@@ -28,6 +29,7 @@ logmon/
         ├── model.py                 # SQLAlchemy models (merge into your own)
         ├── follower.py              # background log-tail threads + Redis buffer
         ├── diskmon.py               # background disk + Docker usage monitor
+        ├── memmon.py                # background memory + swap monitor
         ├── logparser.py             # app log + access log parsers
         ├── alerter.py               # email alert sender
         ├── access_analysis.py       # bad-actor queries + CPU metrics wrapper
@@ -37,6 +39,7 @@ logmon/
         │   ├── auth.py              # super-admin role check
         │   ├── dashboard.py
         │   ├── disk.py              # disk detail + history views
+        │   ├── mem.py               # memory history view
         │   ├── logs.py
         │   ├── sns.py
         │   ├── api.py               # JSON API for live tail, stats, and disk usage
@@ -46,6 +49,7 @@ logmon/
         │   ├── dashboard.jinja2
         │   ├── disk_detail.jinja2
         │   ├── disk_history.jinja2
+        │   ├── mem_history.jinja2
         │   ├── live_tail.jinja2
         │   ├── logs_index.jinja2
         │   ├── app_log.jinja2
@@ -68,7 +72,7 @@ logmon/
 | Service | Purpose |
 | --- | --- |
 | `app` | Serves the dashboard UI, SNS webhook, live-tail API, and access-analysis pages |
-| `follower` | Tails log files; pushes lines to Redis and events to DB; collects disk usage stats |
+| `follower` | Tails log files; pushes lines to Redis and events to DB; collects disk and memory usage stats |
 | `redis` | Shared live-tail ring buffer between `app` and `follower` |
 | `db` | MySQL database (replace stub with your own service definition) |
 
@@ -156,6 +160,23 @@ The following environment variables control disk monitoring behaviour
 | `DISK_CHECK_INTERVAL` | `60` | seconds between collection runs |
 | `DISK_SNAPSHOT_HISTORY` | `1440` | snapshots kept in Redis (24 h at 1-per-min) |
 | `DISK_EXCLUDE_MOUNTS` | _(none)_ | comma-separated mount points to hide from the UI and suppress alerts for (e.g. `/boot,/boot/efi`) |
+
+**Memory & Swap monitoring** — the `follower` service also reads `/proc/meminfo`
+every 60 seconds. Because `/proc/meminfo` reflects the host kernel's view of
+memory (Docker containers share the host kernel), the numbers are always the
+host's real RAM and swap regardless of any cgroup memory limit on the
+container. A summary tile appears on the dashboard alongside disk usage; the
+Memory History page (`/mem/history`) charts RAM and swap % over time.
+
+The following environment variables control memory monitoring behaviour
+(all optional, defaults shown):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SWAP_ALERT_THRESHOLD_PCT` | `90` | swap % used at which an alert email is sent |
+| `MEM_ALERT_SUPPRESS_SECONDS` | `14400` | seconds between repeat swap alerts (4 h) |
+| `MEM_CHECK_INTERVAL` | `60` | seconds between collection runs |
+| `MEM_SNAPSHOT_HISTORY` | `1440` | snapshots kept in Redis (24 h at 1-per-min) |
 
 **Secret files** — create these before running `docker compose up`.
 All are gitignored. Generate random values with:
@@ -335,6 +356,11 @@ disk does not flood the same inbox as application exceptions. If
 `DISK_ALERT_SUPPRESS_SECONDS` is not set, `ALERT_SUPPRESS_SECONDS` is used
 as a fallback.
 
+Swap alerts fire when swap usage reaches `SWAP_ALERT_THRESHOLD_PCT` (default
+90 %). Repeat alerts are suppressed for `MEM_ALERT_SUPPRESS_SECONDS` (default
+4 h); if that key is absent `ALERT_SUPPRESS_SECONDS` is used as a fallback.
+No alert is sent if the host has no swap configured (`SwapTotal = 0`).
+
 ---
 
 ## Disk usage
@@ -384,6 +410,35 @@ DELETE FROM disk_snapshot WHERE collected_at < NOW() - INTERVAL 90 DAY;
 
 ---
 
+## Memory & Swap
+
+A **Memory & Swap** tile on the dashboard shows current RAM and swap usage,
+refreshed every 60 seconds. RAM usage is displayed as a simple percentage bar.
+Swap shows a colour-coded bar (green → yellow → red) with an ⚠ badge when
+usage reaches `SWAP_ALERT_THRESHOLD_PCT`. If no swap is configured on the host,
+the swap bar is replaced with "No swap configured".
+
+The **Memory History** page (`/mem/history`) charts RAM and swap usage
+percentage over the last 24 hours, 7 days, or 30 days. Tooltips show both the
+percentage and the absolute used/total values. A dashed threshold line marks
+`SWAP_ALERT_THRESHOLD_PCT` on the swap series.
+
+History data is stored in the `mem_snapshot` table (one row per collection
+run). The `/api/mem/history` endpoint exposes this data:
+
+```
+GET /api/mem/history?hours=24    # last 24 hours
+GET /api/mem/history?hours=168   # last 7 days
+```
+
+Rows accumulate indefinitely. To purge data older than 90 days:
+
+```sql
+DELETE FROM mem_snapshot WHERE collected_at < NOW() - INTERVAL 90 DAY;
+```
+
+---
+
 ## Bad actor analysis
 
 The **Bad Actors** page (`/access/`) identifies IP addresses making unusually
@@ -409,8 +464,8 @@ environment:
 3. Click **Analyse**.
 
 Results show each IP's total request count, 4xx/5xx error count, country of
-origin, and the top 5 paths requested. Columns are sortable by clicking their
-headers.
+origin, and the top 5 paths requested (each annotated with the app that served
+it). Columns are sortable by clicking their headers.
 
 ### iptables export
 
@@ -429,7 +484,8 @@ iptables-save > /etc/iptables/rules.v4
 
 If any external IP exceeds `BAD_ACTOR_THRESHOLD` requests within the last
 `BAD_ACTOR_WINDOW_HOURS` hours, a red alert tile appears on the dashboard
-showing the top offenders with a link to the full report. The tile is hidden
+showing the top offenders (request count and 4xx/5xx error count per IP)
+with a link to the full report. The tile is hidden
 when no IPs breach the threshold. It refreshes every 30 seconds alongside the
 other dashboard panels.
 
@@ -495,7 +551,7 @@ project uses a different name.
 
 | Database | Bind key | Models |
 | --- | --- | --- |
-| `DATABASE_URL` | (default) | `LogEvent`, `AccessEvent`, `AlertSuppression`, `SnsNotification`, `DiskSnapshot` |
+| `DATABASE_URL` | (default) | `LogEvent`, `AccessEvent`, `AlertSuppression`, `SnsNotification`, `DiskSnapshot`, `MemSnapshot` |
 | `USERS_DATABASE_URL` | `users` | `User`, `Role` — shared with other apps |
 
 Flask-Migrate runs only against the default DB. The `model.py` file provided

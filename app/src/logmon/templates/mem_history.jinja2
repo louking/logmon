@@ -1,0 +1,235 @@
+{% extends "base.jinja2" %}
+
+{% block title %}Memory History – LogMon{% endblock %}
+{% block page_title %}Memory &amp; Swap History{% endblock %}
+
+{% block head_extra %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+
+<!-- Controls -->
+<div class="card gap">
+  <div class="card-body" style="padding:14px 18px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+    <button class="btn btn-ghost range-btn" data-days="1">24 hours</button>
+    <button class="btn btn-ghost range-btn" data-days="7">7 days</button>
+    <button class="btn btn-ghost range-btn" data-days="30">30 days</button>
+    <span id="history-status" style="margin-left:10px;font-size:11px;color:var(--text-muted);"></span>
+  </div>
+</div>
+
+<!-- Usage % chart -->
+<div class="disk-section-heading">RAM &amp; Swap Usage % Over Time</div>
+<div class="card gap" id="mem-chart-card" style="display:none;">
+  <div class="card-body" style="padding:14px 18px;position:relative;min-height:260px;">
+    <canvas id="mem-chart"></canvas>
+  </div>
+</div>
+<div id="mem-loading" class="disk-no-data">Select a time range above.</div>
+<div id="mem-unavailable" class="disk-no-data" style="display:none;">
+  No memory history available for this window.
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+
+  const SWAP_THRESHOLD_PCT = {{ swap_threshold_pct | default(50) }};
+
+  function cv(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  function fmtKb(kb) {
+    if (kb == null) return "–";
+    if (kb >= 1048576) return (kb / 1048576).toFixed(1) + " GB";
+    if (kb >= 1024)    return (kb / 1024).toFixed(1)   + " MB";
+    return kb + " KB";
+  }
+
+  function fmtTs(isoStr) {
+    const d = new Date(isoStr);
+    return d.toLocaleString([], {
+      month: 'short', day: 'numeric',
+      hour: '2-digit', minute: '2-digit',
+      hour12: false,
+    });
+  }
+
+  function tickLabel(dates, idx, spanDays) {
+    if (idx < 0 || idx >= dates.length) return '';
+    const d    = new Date(dates[idx]);
+    const time = d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', hour12: false});
+    if (!spanDays) return time;
+    return [d.toLocaleDateString([], {month: 'short', day: 'numeric'}), time];
+  }
+
+  let _chart = null;
+
+  function destroyChart() {
+    if (_chart) { _chart.destroy(); _chart = null; }
+  }
+
+  function renderChart(points) {
+    const card     = document.getElementById('mem-chart-card');
+    const unavail  = document.getElementById('mem-unavailable');
+    const loading  = document.getElementById('mem-loading');
+
+    loading.style.display = 'none';
+
+    if (!points || points.length === 0) {
+      unavail.style.display = '';
+      return;
+    }
+
+    card.style.display = '';
+    const dates = points.map(p => p.collected_at);
+    const spanDays = dates.length > 1 && (
+      new Date(dates[0]).toLocaleDateString() !==
+      new Date(dates[dates.length - 1]).toLocaleDateString()
+    );
+
+    const nPoints = points.length;
+    const ptRadius = nPoints > 300 ? 0 : 2;
+
+    const datasets = [
+      {
+        label:           'RAM used',
+        data:            points.map(p => p.mem_pct),
+        borderColor:     cv('--accent'),
+        backgroundColor: cv('--accent') + '22',
+        borderWidth:     1.5,
+        pointRadius:     ptRadius,
+        fill:            false,
+        tension:         0.2,
+        _raw:            points.map(p => ({ used: p.mem_used_kb, total: p.mem_total_kb })),
+      },
+    ];
+
+    // Only add swap series if any point has swap configured
+    const hasSwap = points.some(p => p.swap_total_kb > 0);
+    if (hasSwap) {
+      datasets.push({
+        label:           'Swap used',
+        data:            points.map(p => p.swap_pct),
+        borderColor:     cv('--yellow'),
+        backgroundColor: cv('--yellow') + '22',
+        borderWidth:     1.5,
+        pointRadius:     ptRadius,
+        fill:            false,
+        tension:         0.2,
+        _raw:            points.map(p => ({ used: p.swap_used_kb, total: p.swap_total_kb })),
+      });
+
+      // Dashed threshold line for swap
+      datasets.push({
+        label:       'Swap threshold (' + SWAP_THRESHOLD_PCT + '%)',
+        data:        dates.map(() => SWAP_THRESHOLD_PCT),
+        borderColor: cv('--red') + '88',
+        borderWidth: 1,
+        borderDash:  [4, 4],
+        pointRadius: 0,
+        fill:        false,
+      });
+    }
+
+    const options = {
+      responsive: true,
+      animation:  false,
+      interaction: { mode: 'index', axis: 'x', intersect: false },
+      scales: {
+        x: {
+          ticks: {
+            color:         cv('--text-muted'),
+            maxTicksLimit: spanDays ? 14 : 12,
+            font:          { size: 10 },
+            minRotation:   spanDays ? 30 : 0,
+            maxRotation:   spanDays ? 45 : 0,
+            callback(val)  { return tickLabel(dates, Math.round(val), spanDays); },
+          },
+          grid: { color: cv('--border') },
+        },
+        y: {
+          title: { display: true, text: 'Use %', color: cv('--text-muted'), font: { size: 10 } },
+          ticks: { color: cv('--text-muted'), font: { size: 10 }, callback: v => v + '%' },
+          grid:  { color: cv('--border') },
+          min: 0,
+          max: 100,
+        },
+      },
+      plugins: {
+        legend: { labels: { color: cv('--text-muted'), font: { size: 11 } } },
+        tooltip: {
+          backgroundColor: cv('--bg3'),
+          titleColor:      cv('--text'),
+          bodyColor:       cv('--text-muted'),
+          borderColor:     cv('--border2'),
+          borderWidth:     1,
+          callbacks: {
+            title: items => fmtTs(dates[items[0].dataIndex]),
+            label: ctx => {
+              const raw = ctx.dataset._raw && ctx.dataset._raw[ctx.dataIndex];
+              if (raw) {
+                return ' ' + ctx.dataset.label + ': ' + ctx.parsed.y + '%'
+                  + '  (' + fmtKb(raw.used) + ' / ' + fmtKb(raw.total) + ')';
+              }
+              return ' ' + ctx.dataset.label + ': ' + ctx.parsed.y + '%';
+            },
+          },
+        },
+      },
+    };
+
+    destroyChart();
+    _chart = new Chart(
+      document.getElementById('mem-chart').getContext('2d'),
+      { type: 'line', data: { labels: dates.map((_, i) => i), datasets }, options }
+    );
+  }
+
+  function load(days) {
+    document.getElementById('history-status').textContent   = 'Loading…';
+    document.getElementById('mem-loading').style.display    = '';
+    document.getElementById('mem-chart-card').style.display = 'none';
+    document.getElementById('mem-unavailable').style.display= 'none';
+    destroyChart();
+
+    const hours = days * 24;
+    fetch(`{{ url_for('api.api_mem_history') }}?hours=${hours}`)
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        renderChart(data.points || []);
+        const n = (data.points || []).length;
+        document.getElementById('history-status').textContent = n + ' samples';
+      })
+      .catch(err => {
+        document.getElementById('mem-loading').style.display     = 'none';
+        document.getElementById('mem-unavailable').style.display = '';
+        document.getElementById('mem-unavailable').style.color   = cv('--red');
+        document.getElementById('mem-unavailable').textContent   = `Failed to load history (${err})`;
+        document.getElementById('history-status').textContent    = '';
+      });
+  }
+
+  document.querySelectorAll('.range-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.range-btn').forEach(b => {
+        b.classList.remove('btn-primary');
+        b.classList.add('btn-ghost');
+      });
+      btn.classList.remove('btn-ghost');
+      btn.classList.add('btn-primary');
+      load(parseInt(btn.dataset.days, 10));
+    });
+  });
+
+  document.addEventListener('DOMContentLoaded', () => {
+    document.querySelector('.range-btn[data-days="1"]').click();
+  });
+})();
+</script>
+{% endblock %}

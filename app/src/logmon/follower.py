@@ -93,11 +93,17 @@ def get_all_tails(n: int = 50, kind: str = "app", flask_app=None) -> dict:
 
 
 def start_follower(flask_app) -> None:
+    from .diskmon import start_disk_monitor
+    from .memmon import start_mem_monitor
+
     global _manager
     if _manager is None:
         _manager = FollowerManager(flask_app)
         _manager.start()
         log.info("FollowerManager started")
+
+    start_disk_monitor(flask_app)
+    start_mem_monitor(flask_app)
 
 
 # ---------------------------------------------------------------- FileFollower

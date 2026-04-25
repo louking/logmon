@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project is
 
-logmon is a Flask application that tails logs from multiple Flask apps in a Docker Compose stack, displays them in a dashboard, and emails alerts when new exception types appear. It also monitors disk usage, analyzes access logs for bad actors, and shows CPU utilization via the DigitalOcean API. SNS/SES webhook notifications are displayed alongside log events.
+logmon is a Flask application that tails logs from multiple Flask apps in a Docker Compose stack, displays them in a dashboard, and emails alerts when new exception types appear. It also monitors disk usage and memory/swap, analyzes access logs for bad actors, and shows CPU utilization via the DigitalOcean API. SNS/SES webhook notifications are displayed alongside log events.
 
 ## Commands
 
@@ -49,7 +49,7 @@ docker compose exec app flask --app app create-user --admin
 | Service | Role |
 |---|---|
 | `app` | Serves the Flask web UI, SNS webhook, and JSON API. Scaled freely. Uses `app_server.py` as WSGI entrypoint. |
-| `follower` | Single-instance daemon that tails log files and collects disk stats. Runs `flask run-follower`. |
+| `follower` | Single-instance daemon that tails log files and collects disk and memory stats. Runs `flask run-follower`. |
 | `redis` | Shared ephemeral live-tail buffer between `app` and `follower`. |
 | `db` | MySQL. |
 | `crond` | Cron jobs for maintenance (backups, log pruning). |
@@ -66,10 +66,11 @@ Both call `logmon.create_app()` from `logmon/__init__.py`.
 
 ### Background threads (follower container only)
 
-`app.py` registers the `flask run-follower` CLI command that starts two daemon thread managers:
+`app.py` registers the `flask run-follower` CLI command that starts three daemon thread managers:
 
 - **`FollowerManager`** (`follower.py`) — rescans `LOG_APPS` every 30 seconds and spawns/restarts a `FileFollower` thread per log file. Each `FileFollower` seeks to EOF on start, then tails the file. App logs are parsed for errors/exceptions (multi-line tracebacks are assembled before persisting). Access log lines are parsed and persisted as `AccessEvent` rows. Both kinds push to Redis for the live-tail API.
 - **`DiskMonitor`** (`diskmon.py`) — runs `df -P` and `docker system df` every `DISK_CHECK_INTERVAL` seconds. Stores snapshots in Redis and persists to `DiskSnapshot` (DB). Sends suppressed alert emails when a filesystem exceeds `DISK_ALERT_THRESHOLD_PCT`.
+- **`MemMonitor`** (`memmon.py`) — reads `/proc/meminfo` every `MEM_CHECK_INTERVAL` seconds. Stores snapshots in Redis and persists to `MemSnapshot` (DB). Sends suppressed alert emails when swap usage exceeds `SWAP_ALERT_THRESHOLD_PCT`. `/proc/meminfo` always reflects the host kernel's memory, not the container's cgroup limit.
 
 ### Configuration loading
 
@@ -79,14 +80,14 @@ Both call `logmon.create_app()` from `logmon/__init__.py`.
 
 | Key | Bind | Tables |
 |---|---|---|
-| `DATABASE_URL` | default | `LogEvent`, `AccessEvent`, `AlertSuppression`, `SnsNotification`, `DiskSnapshot` |
+| `DATABASE_URL` | default | `LogEvent`, `AccessEvent`, `AlertSuppression`, `SnsNotification`, `DiskSnapshot`, `MemSnapshot` |
 | `USERS_DATABASE_URL` | `users` | `User`, `Role` — shared with other apps, managed externally |
 
 Flask-Migrate only runs against the default DB. The `db` object is imported from `loutilities.user.model`, not created locally — this is why `model.py` imports `db` from loutilities.
 
 ### Alert suppression
 
-Both log alerts and disk alerts share the `AlertSuppression` table. Disk alerts use `app_name="diskmon"` with `exception_type` set to the mount-point string. This allows the same suppress-and-reset logic to work for both.
+Log alerts, disk alerts, and swap alerts all share the `AlertSuppression` table. Disk alerts use `app_name="diskmon"` with `exception_type` set to the mount-point string. Swap alerts use `app_name="memmon"` with `exception_type="swap"`. This allows the same suppress-and-reset logic to work for all three.
 
 ### Access analysis
 

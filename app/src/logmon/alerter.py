@@ -100,3 +100,53 @@ def send_disk_alert(flask_app, fs: dict, threshold: int) -> None:
         log.info("Disk alert sent: %s at %d%%", mount, use_pct)
     except Exception:
         log.exception("Failed to send disk alert email")
+
+
+def send_mem_alert(flask_app, swap: dict, threshold: int) -> None:
+    """
+    Send an alert email when swap usage exceeds the configured threshold.
+
+    ``swap`` is the swap sub-dict from a memmon snapshot::
+
+        {
+            "total_kb": 2097152,
+            "free_kb":  524288,
+            "used_kb":  1572864,
+            "pct":      75,
+        }
+    """
+    from loutilities.flask_helpers.mailer import sendmail
+
+    recipients = flask_app.config.get("ALERT_RECIPIENTS", [])
+    recipients = [r for r in recipients if r.strip()]
+    if not recipients:
+        log.warning("No ALERT_RECIPIENTS configured — skipping mem alert")
+        return
+
+    pct     = swap.get("pct", 0)
+    subject = f"[logmon] swap alert: {pct}% used (threshold {threshold}%)"
+
+    fromaddr = flask_app.config.get(
+        "ALERT_FROM",
+        flask_app.config.get("MAIL_DEFAULT_SENDER", None),
+    )
+
+    def _fmt_kb(kb: int) -> str:
+        if kb >= 1_048_576:
+            return f"{kb / 1_048_576:.1f} GB"
+        if kb >= 1_024:
+            return f"{kb / 1_024:.1f} MB"
+        return f"{kb} KB"
+
+    lines = [
+        f"Swap used: {pct}%  (threshold: {threshold}%)",
+        f"Total:     {_fmt_kb(swap.get('total_kb', 0))}",
+        f"Used:      {_fmt_kb(swap.get('used_kb',  0))}",
+        f"Free:      {_fmt_kb(swap.get('free_kb',  0))}",
+    ]
+
+    try:
+        sendmail(subject, fromaddr, recipients, None, text="\n".join(lines))
+        log.info("Mem alert sent: swap at %d%%", pct)
+    except Exception:
+        log.exception("Failed to send mem alert email")

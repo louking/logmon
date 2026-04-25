@@ -179,6 +179,16 @@ class Config(object):
         if m.strip()
     ]
  
+    # --------------------------------------------------------- memory monitor
+    # Percentage of swap used at which an alert email is sent.
+    SWAP_ALERT_THRESHOLD_PCT: int = int(os.environ.get("SWAP_ALERT_THRESHOLD_PCT", 90))
+    # How often (seconds) to collect /proc/meminfo stats.
+    MEM_CHECK_INTERVAL: int = int(os.environ.get("MEM_CHECK_INTERVAL", 60))
+    # How many snapshots to retain in Redis (default 1440 = 24 h at 1/min).
+    MEM_SNAPSHOT_HISTORY: int = int(os.environ.get("MEM_SNAPSHOT_HISTORY", 1440))
+    # Minimum seconds between swap alerts (default 4 h).
+    MEM_ALERT_SUPPRESS_SECONDS: int = int(os.environ.get("MEM_ALERT_SUPPRESS_SECONDS", 14400))
+
     # ------------------------------------------------------------ SNS
     SNS_TOPIC_ARNS_ALLOWED: list[str] = [
         t.strip() for t in os.environ.get("SNS_TOPIC_ARNS", "").split(",") if t.strip()

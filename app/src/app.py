@@ -49,13 +49,11 @@ def run_follower() -> None:
     no duplication regardless of how many 'web' workers are running.
     """
     from logmon.follower import start_follower
-    from logmon.diskmon import start_disk_monitor
 
     click.echo("Starting log follower...")
     with app.app_context():
         start_follower(app)
-        start_disk_monitor(app)
-        click.echo("Follower and disk monitor running. Press Ctrl+C to stop.")
+        click.echo("Follower running. Press Ctrl+C to stop.")
         try:
             while True:
                 time.sleep(60)

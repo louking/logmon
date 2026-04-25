@@ -410,6 +410,108 @@ def api_disk_history():
 
 
 # ---------------------------------------------------------------------------
+# JSON API — Memory / swap usage
+# ---------------------------------------------------------------------------
+
+@bp.route("/mem/history")
+@login_required
+def api_mem_history():
+    """
+    Return time-series memory/swap data from the database for charting.
+
+    Query params
+    ------------
+    hours   int   look-back window (default 24, max 8760 = 1 year)
+
+    Response::
+
+        {
+            "hours": 24,
+            "points": [
+                {
+                    "collected_at":  "2025-01-01T00:00:00",
+                    "mem_pct":       52,
+                    "mem_used_kb":   4300000,
+                    "mem_total_kb":  8192000,
+                    "swap_pct":      10,
+                    "swap_used_kb":  209715,
+                    "swap_total_kb": 2097152
+                },
+                ...
+            ]
+        }
+    """
+    from ..model import MemSnapshot
+    from datetime import timedelta
+
+    hours = min(int(request.args.get("hours", 24)), 8760)
+    since = datetime.now() - timedelta(hours=hours)
+
+    rows = (
+        MemSnapshot.query
+        .filter(MemSnapshot.collected_at >= since)
+        .order_by(MemSnapshot.collected_at.asc())
+        .all()
+    )
+
+    points = [
+        {
+            "collected_at":  r.collected_at.isoformat(),
+            "mem_pct":       r.mem_pct,
+            "mem_used_kb":   r.mem_used_kb,
+            "mem_total_kb":  r.mem_total_kb,
+            "swap_pct":      r.swap_pct,
+            "swap_used_kb":  r.swap_used_kb,
+            "swap_total_kb": r.swap_total_kb,
+        }
+        for r in rows
+    ]
+
+    return jsonify({"hours": hours, "points": points})
+
+
+@bp.route("/mem/summary")
+@login_required
+def api_mem_summary():
+    """
+    Return the most-recent memory/swap snapshot for the dashboard tile.
+
+    Response shape::
+
+        {
+            "collected_at": "2025-01-01T00:00:00",
+            "mem": {
+                "total_kb":     8192000,
+                "available_kb": 4096000,
+                "used_kb":      4096000,
+                "pct":          50
+            },
+            "swap": {
+                "total_kb": 2097152,
+                "free_kb":  1048576,
+                "used_kb":  1048576,
+                "pct":      50
+            },
+            "swap_threshold_pct": 50
+        }
+
+    ``swap`` pct is 0 and total_kb is 0 when no swap is configured.
+    """
+    from ..memmon import get_mem_snapshot
+
+    snapshot = get_mem_snapshot(current_app._get_current_object())
+    if snapshot is None:
+        return jsonify({"error": "No memory snapshot available yet"}), 503
+
+    return jsonify({
+        "collected_at":      snapshot.get("collected_at"),
+        "mem":               snapshot.get("mem", {}),
+        "swap":              snapshot.get("swap", {}),
+        "swap_threshold_pct": current_app.config.get("SWAP_ALERT_THRESHOLD_PCT", 50),
+    })
+
+
+# ---------------------------------------------------------------------------
 # JSON API — Access rate (for CPU chart overlay)
 # ---------------------------------------------------------------------------
 

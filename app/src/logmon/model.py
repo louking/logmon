@@ -227,3 +227,26 @@ class DiskSnapshot(Base):
                 "build_cache_reclaimable_bytes": self.docker_build_cache_reclaimable_bytes,
             } if self.mount == "__docker__" else None,
         }
+
+
+class MemSnapshot(Base):
+    """One persisted memory/swap sample per collection run."""
+    __tablename__ = "mem_snapshot"
+
+    id           = db.Column(db.Integer, primary_key=True)
+    collected_at = db.Column(db.DateTime, nullable=False, index=True,
+                             default=datetime.now)
+
+    mem_total_kb     = db.Column(db.BigInteger)
+    mem_available_kb = db.Column(db.BigInteger)
+    mem_used_kb      = db.Column(db.BigInteger)
+    mem_pct          = db.Column(db.Integer)   # 0-100
+
+    swap_total_kb = db.Column(db.BigInteger)
+    swap_free_kb  = db.Column(db.BigInteger)
+    swap_used_kb  = db.Column(db.BigInteger)
+    swap_pct      = db.Column(db.Integer)      # 0-100
+
+    __table_args__ = (
+        db.UniqueConstraint("collected_at", name="uq_mem_ts"),
+    )

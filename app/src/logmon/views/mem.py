@@ -5,17 +5,14 @@ from flask_security import login_required
 
 from .auth import require_super_admin
 
-bp = Blueprint("dashboard", __name__, url_prefix="/dashboard")
+bp = Blueprint("mem", __name__, url_prefix="/mem")
 bp.before_request(require_super_admin)
 
 
-@bp.route("/")
+@bp.route("/history")
 @login_required
-def index():
-    # All data is loaded client-side via /api/stats, /api/recent_errors,
-    # and /api/sns/recent — no server-side DB queries needed here.
+def mem_history():
     return render_template(
-        "dashboard.jinja2",
-        disk_threshold_pct=current_app.config.get("DISK_ALERT_THRESHOLD_PCT", 85),
+        "mem_history.jinja2",
         swap_threshold_pct=current_app.config.get("SWAP_ALERT_THRESHOLD_PCT", 90),
     )
