@@ -372,14 +372,13 @@ class FollowerManager(threading.Thread):
         for entry in log_apps:
             if entry.app_log_enabled:
                 self._ensure_follower(entry.app_log_path, "app", entry)
-            else:
-                log.debug("App log follower disabled for %s", entry.name)
             self._ensure_follower(entry.access_log_path, "access", entry)
 
     def _ensure_follower(self, filepath: str, parser: ParserType, entry) -> None:
         if not filepath:
             return   # disabled (e.g. app_log: false)
         if not os.path.exists(filepath):
+            log.warning("Expected %s log not found, will retry: %s", parser, filepath)
             return   # not present yet; picked up on next scan
         follower = self._followers.get(filepath)
         if follower is not None and follower.is_alive():
