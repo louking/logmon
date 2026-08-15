@@ -106,6 +106,15 @@ The FollowerManager picks up new files within 30 seconds without a restart.
 - `docker-compose.override.yml` — host bind-mounts and environment variables (copy from `.example`)
 - `config/logapps.yml` — monitored app definitions (copy from `.example`)
 - `config/*.txt` — Docker secret files (Flask secret key, DB passwords, SMTP password, SNS webhook key)
+- `config/cronjobs` — `crond`'s crontab for `appuser` (mounted at `/etc/crontabs/appuser`), meant to hold the backup/log-pruning jobs referenced in the services table above. **Unlike the files above, there is no `.example` template for this one anywhere in git history** (`git log --all -- config/cronjobs` is empty, and `git ls-files config/` shows only `logapps.yml.example`) — confirmed while diagnosing the `logmon.log` root-ownership gotcha below. If this file is missing, Docker Compose silently auto-creates `config/cronjobs` as an *empty directory* instead of erroring, which leaves `crond`'s `appuser` crontab silently broken (no maintenance jobs run) rather than visibly failing.
+
+### `logmon.log` can end up owned by `root`, blocking the app's own file logging
+
+`app`/`follower` run as `appuser` (uid 5678, per the Dockerfile). `applogging.py`'s `setlogging()` (via `loutilities.user.applogging`) attaches a `TimedRotatingFileHandler(logpath, when='W0', delay=True)` at `FLASK_LOGGING_PATH` (`/var/log/<APP_NAME>/<APP_NAME>.log` — `/var/log/logmon/logmon.log` here). `delay=True` means the file is opened lazily on first emit, so a permissions problem doesn't surface until the first log call after the app is already serving traffic.
+
+**Confirmed live**: `logmon.log` was found owned `root:root` mode `644` while `appuser` (5678) owned the *directory* (`/var/log/logmon`, `0777`). Since `appuser` was neither the file's owner nor in its group, mode `644` left it read-only for `appuser` — every `after_request` log call (`logmon/__init__.py:211`) failed `_open()` with `PermissionError`, which Python's `logging` module caught internally and printed as a `--- Logging error ---` block rather than crashing the request — so the app kept working, but spammed this error on literally every request, surviving container restarts (a fresh file was never created because the stale root-owned one was never removed). Some of the historical weekly-rotated logs (`logmon.log.2026-04-07`/`04-14`/`04-21`) were also root-owned while earlier ones weren't — exact culprit unconfirmed, but `crond` (the only service in this compose file that runs `user: root` while also mounting the whole `/var/log` tree) is the prime suspect if this recurs; `config/cronjobs` was empty on the dev machine where this was diagnosed, ruling out an actual configured cron job as the cause *that time*.
+
+**Fix**: `docker compose exec app rm /var/log/logmon/logmon.log` — since the *directory* is `0777`, `appuser` can unlink a file it doesn't own or have write access to (POSIX directory-write governs delete, not the file's own permission bits, and no sticky bit is set here). The app recreates the file fresh — correctly owned by `appuser` — on the next log emission. No container restart needed.
 
 ## Tests
 
