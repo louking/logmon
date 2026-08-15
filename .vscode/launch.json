@@ -1,0 +1,131 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Flask",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "flask",
+            "justMyCode": false,
+            "env": {
+                "FLASK_APP": "run.py",
+                "FLASK_DEBUG": "True"
+            },
+            "args": [
+                "run",
+                "--no-debugger"
+            ],
+            "jinja": true
+        },
+        {
+            "name": "Launch Chrome",
+            "request": "launch",
+            "type": "chrome",
+            "url": "http://logmon.localhost",
+            "webRoot": "${workspaceFolder}",
+            // "justMyCode": false,
+        },
+        {
+            "name": "Python: Remote Attach",
+            "type": "debugpy",
+            "request": "attach",
+            "connect": {"host": "localhost", "port": 5678},
+            "pathMappings": [
+                {
+                    "localRoot": "${workspaceFolder}/app/src",
+                    "remoteRoot": "/app"
+                },
+                // allow debugging of pip installed packages
+                {
+                    "localRoot": "${workspaceFolder}/.venv/Lib/site-packages",
+                    "remoteRoot": "/usr/local/lib/python3.12/site-packages"
+                }
+            ],
+            "justMyCode": false
+        },
+        {
+            "name": "Python: flask membership update fsrc",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "flask",
+            "justMyCode": false,
+            "env": {
+                "FLASK_APP": "app.py",
+                "FLASK_DEBUG": "True"
+            },
+            "args": [
+                "membership",
+                "update",
+                "fsrc",
+                // "--membershipfile",
+                // "C:\\Users\\lking\\Documents\\Lou's Software\\operational\\fsrc\\membercache\\membercache.csv",
+            ],
+            "jinja": true
+        },
+        {
+            "name": "Python: flask db upgrade",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "flask",
+            "justMyCode": false,
+            "env": {
+                "FLASK_APP": "app.py",
+                "FLASK_DEBUG": "True"
+            },
+            "args": [
+                "db",
+                "upgrade",
+            ],
+            "jinja": true
+        },
+        {
+            "name": "Python: flask task sendreminders",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "flask",
+            "args": [
+                "task",
+                "sendreminders",
+                "fsrc",
+            ],
+        },
+        {
+            "name": "Python: racingteam_inforesults_init",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "members.scripts.racingteam_inforesults_init",
+            "args": [
+                "C:\\Users\\lking\\OneDrive\\Documents\\King-Langlois\\FSRC\\Racing Team\\rt table init files\\racing-team-script-inforesults-2.csv",
+            ],
+        },
+        {
+            "name": "Python: racingteam_infovol_init",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "members.scripts.racingteam_infovol_init",
+            "args": [
+                "C:\\Users\\lking\\OneDrive\\Documents\\King-Langlois\\FSRC\\Racing Team\\rt table init files\\racingteam-script-infovol-2.csv",
+            ],
+        },
+        {
+            "name": "Python: racingteam_appln_init",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "members.scripts.racingteam_appln_init",
+            "args": [
+                "C:\\Users\\lking\\OneDrive\\Documents\\King-Langlois\\FSRC\\Racing Team\\rt table init files\\racing-team-applications.csv",
+            ],
+        },
+        {
+            "name": "Python: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+        },
+    ]
+}
